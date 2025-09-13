@@ -1,0 +1,49 @@
+{
+  "name": "ChatMessage",
+  "type": "object",
+  "properties": {
+    "message": {
+      "type": "string",
+      "description": "The chat message content"
+    },
+    "sender": {
+      "type": "string",
+      "enum": [
+        "user",
+        "ai"
+      ],
+      "description": "Who sent the message"
+    },
+    "message_type": {
+      "type": "string",
+      "enum": [
+        "text",
+        "voice",
+        "deal_recommendation",
+        "workflow_update"
+      ],
+      "default": "text"
+    },
+    "metadata": {
+      "type": "object",
+      "properties": {
+        "voice_transcript": {
+          "type": "string"
+        },
+        "deal_ids": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "workflow_step": {
+          "type": "string"
+        }
+      }
+    }
+  },
+  "required": [
+    "message",
+    "sender"
+  ]
+}

@@ -1,0 +1,59 @@
+{
+  "name": "Deal",
+  "type": "object",
+  "properties": {
+    "product_name": {
+      "type": "string",
+      "description": "Name of the product"
+    },
+    "original_price": {
+      "type": "number",
+      "description": "Original price of the product"
+    },
+    "discounted_price": {
+      "type": "number",
+      "description": "Discounted price"
+    },
+    "discount_percentage": {
+      "type": "number",
+      "description": "Percentage of discount"
+    },
+    "retailer": {
+      "type": "string",
+      "description": "Name of the retailer"
+    },
+    "category": {
+      "type": "string",
+      "enum": [
+        "electronics",
+        "fashion",
+        "home",
+        "beauty",
+        "sports",
+        "books",
+        "food"
+      ],
+      "description": "Product category"
+    },
+    "deal_expires": {
+      "type": "string",
+      "format": "date-time",
+      "description": "When the deal expires"
+    },
+    "image_url": {
+      "type": "string",
+      "description": "Product image URL"
+    },
+    "ai_recommendation_score": {
+      "type": "number",
+      "description": "AI confidence score for this recommendation"
+    }
+  },
+  "required": [
+    "product_name",
+    "original_price",
+    "discounted_price",
+    "retailer",
+    "category"
+  ]
+}

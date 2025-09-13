@@ -1,0 +1,62 @@
+{
+  "name": "ShoppingProfile",
+  "type": "object",
+  "properties": {
+    "shopping_preferences": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "User's shopping categories and preferences"
+    },
+    "budget_limits": {
+      "type": "object",
+      "properties": {
+        "monthly_budget": {
+          "type": "number"
+        },
+        "category_budgets": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "number"
+          }
+        }
+      }
+    },
+    "loyalty_programs": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "program_name": {
+            "type": "string"
+          },
+          "member_id": {
+            "type": "string"
+          },
+          "points_balance": {
+            "type": "number"
+          }
+        }
+      }
+    },
+    "notification_preferences": {
+      "type": "object",
+      "properties": {
+        "price_drops": {
+          "type": "boolean",
+          "default": true
+        },
+        "deal_alerts": {
+          "type": "boolean",
+          "default": true
+        },
+        "delivery_updates": {
+          "type": "boolean",
+          "default": true
+        }
+      }
+    }
+  },
+  "required": []
+}
