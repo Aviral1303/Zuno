@@ -24,6 +24,12 @@ export default function Chat() {
   const [isRecording, setIsRecording] = useState(false);
   const mediaRecorderRef = useRef(null);
   const recordedChunksRef = useRef([]);
+  const audioContextRef = useRef(null);
+  const analyserRef = useRef(null);
+  const vadIntervalRef = useRef(null);
+  const silenceStartRef = useRef(null);
+  const VAD_SILENCE_MS = 1200;
+  const VAD_THRESHOLD = 0.01; // RMS threshold
   const [showReasoning, setShowReasoning] = useState(false);
   const messagesEndRef = useRef(null);
   const inputRef = useRef(null);
@@ -123,11 +129,13 @@ export default function Chat() {
         const blob = new Blob(recordedChunksRef.current, { type: mimeType });
         await sendAudioToBackend(blob);
         stream.getTracks().forEach(t => t.stop());
+        teardownVAD();
       };
       mediaRecorder.start();
       mediaRecorderRef.current = mediaRecorder;
       setIsListening(true);
       setIsRecording(true);
+      setupVAD(stream);
     } catch (err) {
       console.error('Mic error:', err);
     }
@@ -139,6 +147,7 @@ export default function Chat() {
     }
     setIsListening(false);
     setIsRecording(false);
+    teardownVAD();
   };
 
   const handleAudioRecord = () => {
@@ -218,6 +227,55 @@ export default function Chat() {
       sender: "ai",
       message_type: "text"
     }]);
+  };
+
+  const setupVAD = (stream) => {
+    try {
+      const audioContext = new (window.AudioContext || window.webkitAudioContext)();
+      audioContextRef.current = audioContext;
+      const source = audioContext.createMediaStreamSource(stream);
+      const analyser = audioContext.createAnalyser();
+      analyser.fftSize = 2048;
+      analyserRef.current = analyser;
+      source.connect(analyser);
+      const data = new Float32Array(analyser.frequencyBinCount);
+      silenceStartRef.current = null;
+      vadIntervalRef.current = setInterval(() => {
+        analyser.getFloatTimeDomainData(data);
+        let sumSquares = 0;
+        for (let i = 0; i < data.length; i++) {
+          const sample = data[i];
+          sumSquares += sample * sample;
+        }
+        const rms = Math.sqrt(sumSquares / data.length);
+        const now = Date.now();
+        if (rms < VAD_THRESHOLD) {
+          if (!silenceStartRef.current) silenceStartRef.current = now;
+          if (now - silenceStartRef.current >= VAD_SILENCE_MS) {
+            stopRecording();
+          }
+        } else {
+          silenceStartRef.current = null;
+        }
+      }, 150);
+    } catch (e) {
+      console.warn('VAD setup failed:', e);
+    }
+  };
+
+  const teardownVAD = () => {
+    if (vadIntervalRef.current) {
+      clearInterval(vadIntervalRef.current);
+      vadIntervalRef.current = null;
+    }
+    try {
+      if (audioContextRef.current) {
+        audioContextRef.current.close();
+      }
+    } catch {}
+    audioContextRef.current = null;
+    analyserRef.current = null;
+    silenceStartRef.current = null;
   };
 
   return (
