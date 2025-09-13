@@ -11,9 +11,12 @@ export class ChatMessage {
 
   // Mock method to get chat messages
   static async getMessages(conversationId = 'default') {
-    // This would typically make an API call
-    // For now, return mock data
-    return [
+    return ChatMessage.list('-created_date');
+  }
+
+  // Add list method expected by Chat.jsx
+  static async list(orderBy = '-created_date', conversationId = 'default') {
+    const messages = [
       new ChatMessage({
         id: '1',
         sender: 'user',
@@ -23,7 +26,7 @@ export class ChatMessage {
       }),
       new ChatMessage({
         id: '2',
-        sender: 'bot',
+        sender: 'ai',
         message: 'I found some great laptop deals for you!',
         message_type: 'deal_recommendation',
         timestamp: new Date(Date.now() - 200000).toISOString(),
@@ -36,6 +39,9 @@ export class ChatMessage {
         }
       })
     ];
+
+    const sorted = [...messages].sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
+    return orderBy?.startsWith('-') ? sorted.reverse() : sorted;
   }
 
   // Mock method to send a message

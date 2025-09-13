@@ -1,0 +1,12 @@
+---
+description:
+globs:
+alwaysApply: true
+---
+All the API keys needed are present in .env file.
+All the prompts should be broken down clearly in smaller tasks and executed one by one and then tested individually to ensure it works.
+
+The code should be modularised in such a way that it is easy to read and understand for you.
+
+
+

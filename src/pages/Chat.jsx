@@ -6,7 +6,9 @@ import {
   Send, 
   RotateCcw,
   Settings,
-  Sparkles
+  Sparkles,
+  Mic,
+  MicOff
 } from "lucide-react";
 import { ChatMessage } from "@/entities/ChatMessage";
 
@@ -19,6 +21,9 @@ export default function Chat() {
   const [inputMessage, setInputMessage] = useState("");
   const [isTyping, setIsTyping] = useState(false);
   const [isListening, setIsListening] = useState(false);
+  const [isRecording, setIsRecording] = useState(false);
+  const mediaRecorderRef = useRef(null);
+  const recordedChunksRef = useRef([]);
   const [showReasoning, setShowReasoning] = useState(false);
   const messagesEndRef = useRef(null);
   const inputRef = useRef(null);
@@ -66,60 +71,36 @@ export default function Chat() {
     setInputMessage("");
     setIsTyping(true);
 
-    // Save user message
+    // Send to backend LLM
     try {
-      await ChatMessage.create(userMessage);
-    } catch (error) {
-      console.error("Error saving message:", error);
-    }
-
-    // Simulate AI thinking time
-    setTimeout(() => {
       setShowReasoning(true);
-    }, 500);
-
-    // Simulate AI response
-    setTimeout(async () => {
+      const baseUrl = import.meta.env.VITE_API_BASE_URL || 'http://localhost:5001';
+      const res = await fetch(`${baseUrl}/llm/chat`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ message: userMessage.message })
+      });
+      const data = await res.json();
       setIsTyping(false);
       setShowReasoning(false);
-
-      let aiResponse;
-      const lowerInput = inputMessage.toLowerCase();
-
-      if (lowerInput.includes('deal') || lowerInput.includes('laptop') || lowerInput.includes('macbook')) {
-        aiResponse = {
-          message: "Great! I found some excellent laptop deals for you. Here's a top recommendation based on your preferences:",
-          sender: "ai",
-          message_type: "deal_recommendation"
+      if (res.ok && data?.reply) {
+        const aiResponse = {
+          message: data.reply,
+          sender: 'ai',
+          message_type: 'text'
         };
-      } else if (lowerInput.includes('gift') || lowerInput.includes('birthday')) {
-        aiResponse = {
-          message: "I'd be happy to help you find the perfect gift! Based on the recipient's interests and your budget, here are some personalized suggestions. Would you like me to set up automatic gift reminders for important dates?",
-          sender: "ai",
-          message_type: "text"
-        };
-      } else if (lowerInput.includes('subscription') || lowerInput.includes('cancel')) {
-        aiResponse = {
-          message: "I can help you manage all your subscriptions! Currently, you have 5 active subscriptions totaling $47/month. Would you like me to show you which ones you haven't used recently or help you find better deals?",
-          sender: "ai",
-          message_type: "text"
-        };
+        setMessages(prev => [...prev, aiResponse]);
+        try { await ChatMessage.create(aiResponse); } catch {}
       } else {
-        aiResponse = {
-          message: "I understand you're looking for shopping assistance. I can help you with finding deals, comparing prices, managing subscriptions, planning gifts, and tracking your spending. What specific area would you like to focus on?",
-          sender: "ai",
-          message_type: "text"
-        };
+        const errMsg = data?.error || 'Model error';
+        setMessages(prev => [...prev, { message: `LLM error: ${errMsg}`, sender: 'ai', message_type: 'text' }]);
       }
-
-      setMessages(prev => [...prev, aiResponse]);
-      
-      try {
-        await ChatMessage.create(aiResponse);
-      } catch (error) {
-        console.error("Error saving AI message:", error);
-      }
-    }, 3000);
+    } catch (error) {
+      setIsTyping(false);
+      setShowReasoning(false);
+      console.error('LLM request failed:', error);
+      setMessages(prev => [...prev, { message: 'LLM request failed. Check server.', sender: 'ai', message_type: 'text' }]);
+    }
   };
 
   const handleKeyPress = (e) => {
@@ -129,14 +110,105 @@ export default function Chat() {
     }
   };
 
-  const toggleListening = () => {
-    setIsListening(!isListening);
-    if (!isListening) {
-      // Simulate voice recognition
-      setTimeout(() => {
-        setInputMessage("Find me the best laptop deals under $2000");
-        setIsListening(false);
-      }, 2000);
+  const startRecording = async () => {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const mimeType = MediaRecorder.isTypeSupported('audio/webm;codecs=opus') ? 'audio/webm;codecs=opus' : 'audio/webm';
+      const mediaRecorder = new MediaRecorder(stream, { mimeType });
+      recordedChunksRef.current = [];
+      mediaRecorder.ondataavailable = (e) => {
+        if (e.data && e.data.size > 0) recordedChunksRef.current.push(e.data);
+      };
+      mediaRecorder.onstop = async () => {
+        const blob = new Blob(recordedChunksRef.current, { type: mimeType });
+        await sendAudioToBackend(blob);
+        stream.getTracks().forEach(t => t.stop());
+      };
+      mediaRecorder.start();
+      mediaRecorderRef.current = mediaRecorder;
+      setIsListening(true);
+      setIsRecording(true);
+    } catch (err) {
+      console.error('Mic error:', err);
+    }
+  };
+
+  const stopRecording = () => {
+    if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
+      mediaRecorderRef.current.stop();
+    }
+    setIsListening(false);
+    setIsRecording(false);
+  };
+
+  const handleAudioRecord = () => {
+    if (!isRecording) startRecording(); else stopRecording();
+  };
+
+  const sendAudioToBackend = async (blob) => {
+    try {
+      const formData = new FormData();
+      const file = new File([blob], 'recording.webm', { type: blob.type || 'audio/webm' });
+      formData.append('audio', file);
+      const baseUrl = import.meta.env.VITE_API_BASE_URL || 'http://localhost:5001';
+      const res = await fetch(`${baseUrl}/transcribe`, {
+        method: 'POST',
+        body: formData,
+      });
+      const data = await res.json();
+      if (res.ok && data?.transcription) {
+        // Set the transcript in input and send it to LLM
+        setInputMessage(data.transcription);
+        // Automatically send the transcribed message to LLM
+        await sendTranscribedMessage(data.transcription);
+      } else {
+        console.error('Transcription error:', data?.error || 'Unknown error');
+      }
+    } catch (e) {
+      console.error('Failed to send audio:', e);
+    }
+  };
+
+  const sendTranscribedMessage = async (transcript) => {
+    if (!transcript.trim()) return;
+
+    const userMessage = {
+      message: transcript,
+      sender: "user",
+      message_type: "text"
+    };
+
+    setMessages(prev => [...prev, userMessage]);
+    setIsTyping(true);
+    setShowReasoning(true);
+
+    try {
+      const baseUrl = import.meta.env.VITE_API_BASE_URL || 'http://localhost:5001';
+      const res = await fetch(`${baseUrl}/llm/chat`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ message: transcript })
+      });
+      const data = await res.json();
+      
+      if (res.ok && data?.reply) {
+        const aiResponse = {
+          message: data.reply,
+          sender: 'ai',
+          message_type: 'text'
+        };
+        setMessages(prev => [...prev, aiResponse]);
+        try { await ChatMessage.create(aiResponse); } catch {}
+      } else {
+        const errMsg = data?.error || 'Model error';
+        setMessages(prev => [...prev, { message: `LLM error: ${errMsg}`, sender: 'ai', message_type: 'text' }]);
+      }
+    } catch (error) {
+      console.error('LLM request failed:', error);
+      setMessages(prev => [...prev, { message: 'LLM request failed. Check server.', sender: 'ai', message_type: 'text' }]);
+    } finally {
+      setIsTyping(false);
+      setShowReasoning(false);
     }
   };
 
@@ -210,10 +282,33 @@ export default function Chat() {
       <div className="bg-white border-t border-gray-200 p-6 shadow-lg">
         <div className="max-w-4xl mx-auto">
           <div className="flex items-center gap-4">
-            <VoiceToggle 
-              isListening={isListening}
-              onToggleListening={toggleListening}
-            />
+            <Button
+              variant="outline"
+              size="icon"
+              onClick={handleAudioRecord}
+              className={`relative rounded-full transition-all duration-300 ${
+                isRecording 
+                  ? 'bg-gradient-to-r from-red-600 to-pink-600 border-red-500 text-white' 
+                  : 'border-gray-200 text-gray-600 hover:bg-gray-100'
+              }`}
+            >
+              {isRecording ? <MicOff className="w-4 h-4" /> : <Mic className="w-4 h-4" />}
+              
+              {isRecording && (
+                <motion.div
+                  className="absolute inset-0 rounded-full border-2 border-red-400"
+                  animate={{
+                    scale: [1, 1.3, 1],
+                    opacity: [0.8, 0, 0.8],
+                  }}
+                  transition={{
+                    duration: 1.5,
+                    repeat: Infinity,
+                    ease: "easeInOut",
+                  }}
+                />
+              )}
+            </Button>
             
             <div className="flex-1 relative">
               <Input
@@ -225,13 +320,13 @@ export default function Chat() {
                 className="bg-gray-50 border-gray-200 text-gray-900 placeholder-gray-500 rounded-2xl pr-12 focus:ring-2 focus:ring-indigo-500 focus:border-transparent"
               />
               
-              {isListening && (
+              {isRecording && (
                 <motion.div
                   className="absolute right-4 top-1/2 -translate-y-1/2"
                   animate={{ opacity: [0.5, 1, 0.5] }}
                   transition={{ duration: 1, repeat: Infinity }}
                 >
-                  <div className="w-3 h-3 bg-indigo-500 rounded-full" />
+                  <div className="w-3 h-3 bg-red-500 rounded-full" />
                 </motion.div>
               )}
             </div>
