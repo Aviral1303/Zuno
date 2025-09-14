@@ -51,10 +51,10 @@ const DealRecommendationsWidget = ({ spendingSummary }) => {
       });
       
       const data = await response.json();
-      if (data.ok && data.items) {
+      if (data.ok && Array.isArray(data.items) && data.items.length > 0) {
         setDeals(data.items);
       } else {
-        // Fallback to mock data if API fails
+        // Fallback to mock data if API fails or returns empty list
         setDeals(getMockDeals());
       }
     } catch (error) {

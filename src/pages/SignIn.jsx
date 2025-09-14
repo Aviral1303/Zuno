@@ -21,42 +21,11 @@ export default function SignIn() {
   useEffect(() => {
     if (user && !authLoading) {
       setLoading(false)
+      navigate('/dashboard', { replace: true })
     }
-  }, [user, authLoading])
+  }, [user, authLoading, navigate])
 
-  // If user is already authenticated, show them options instead of auto-redirecting
-  if (user && !authLoading) {
-    return (
-      <div className="min-h-screen bg-gradient-to-br from-indigo-50 via-white to-purple-50 flex items-center justify-center p-4">
-        <div className="max-w-md w-full bg-white rounded-2xl shadow-xl p-8 text-center">
-          <div className="w-16 h-16 bg-gradient-to-br from-indigo-600 to-purple-600 rounded-2xl flex items-center justify-center mx-auto mb-4">
-            <span className="text-white font-bold text-2xl">Z</span>
-          </div>
-          <h2 className="text-2xl font-bold text-gray-900 mb-2">Already Signed In</h2>
-          <p className="text-gray-600 mb-6">
-            You're already signed in as {user.email}
-          </p>
-          <div className="space-y-3">
-            <button
-              onClick={() => navigate('/dashboard')}
-              className="w-full bg-gradient-to-r from-indigo-600 to-purple-600 text-white py-3 px-4 rounded-lg font-medium hover:from-indigo-700 hover:to-purple-700 transition-all"
-            >
-              Go to Dashboard
-            </button>
-            <button
-              onClick={async () => {
-                await signOut()
-                window.location.reload() // Refresh to show sign in form
-              }}
-              className="w-full border border-gray-300 text-gray-700 py-3 px-4 rounded-lg font-medium hover:bg-gray-50 transition-all"
-            >
-              Sign Out & Sign In as Different User
-            </button>
-          </div>
-        </div>
-      </div>
-    )
-  }
+  // If user is already authenticated, navigation effect will redirect to dashboard
 
   const handleChange = (e) => {
     const { name, value } = e.target

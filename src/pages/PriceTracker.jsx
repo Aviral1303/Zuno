@@ -16,6 +16,9 @@ export default function PriceTracker() {
   const [resolving, setResolving] = useState(false);
   const [watchMeta, setWatchMeta] = useState({}); // id -> { title?, priceUsd? }
   const [history, setHistory] = useState({}); // canonical -> points
+  const [autoSeeded, setAutoSeeded] = useState(false);
+  const [newlyAdded, setNewlyAdded] = useState({}); // canonical_id -> true when just added by user
+  const NEWLY_ADDED_STORAGE_KEY = 'price_tracker_newly_added';
 
   const externalUserId = 'zuno_user_123';
 
@@ -38,6 +41,64 @@ export default function PriceTracker() {
     loadWatches();
     loadMatches();
   }, []);
+
+  // Load persisted newly-added map on mount
+  useEffect(() => {
+    try {
+      const raw = localStorage.getItem(NEWLY_ADDED_STORAGE_KEY);
+      if (raw) {
+        const obj = JSON.parse(raw);
+        if (obj && typeof obj === 'object') {
+          setNewlyAdded(obj);
+        }
+      }
+    } catch {}
+  }, []);
+
+  // Auto-seed demo watches and history on first load if empty, so graphs show by default
+  useEffect(() => {
+    const seedIfEmpty = async () => {
+      if (autoSeeded) return;
+      if (loading) return;
+      const list = Array.isArray(watches) ? watches : [];
+      if (list.length > 0) return;
+      try {
+        // Demo canonical IDs
+        const demos = [
+          { canonical: '44:B0D1R4ZQ9S', note: 'Apple AirPods Pro (2nd Gen)' },
+          { canonical: '44:B09XS7JWHH', note: 'Sony WH-1000XM5 Headphones' },
+          { canonical: '44:B08KTZ8249', note: 'Kindle Paperwhite' },
+          { canonical: '12:84680346', note: 'Target – Apple Watch' },
+          { canonical: '45:554499512', note: 'Walmart – Instant Pot Duo' },
+        ];
+        for (const d of demos) {
+          await fetch(`${baseUrl}/price-protection/watch`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              external_user_id: externalUserId,
+              canonical_id: d.canonical,
+              note: d.note,
+            })
+          });
+        }
+        // Seed realistic demo history
+        await fetch(`${baseUrl}/price-history/seed_demo`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ points: 48, days: 365, jitter_pct: 0.05, external_user_id: externalUserId })
+        });
+        await loadWatches();
+        setHistory({});
+      } catch (e) {
+        // ignore seeding errors silently
+      } finally {
+        setAutoSeeded(true);
+      }
+    };
+    seedIfEmpty();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [JSON.stringify(watches), loading, autoSeeded]);
 
   useEffect(() => {
     // For each watch, try to resolve product meta (title/price) if we can infer a URL
@@ -111,8 +172,35 @@ export default function PriceTracker() {
     const w = 280;
     const h = 64;
     const pad = 6;
-    const xs = points.map((p, i) => i);
-    const ys = points.map((p) => Number(p.price_usd));
+    const xsRaw = points.map((p, i) => i);
+    const rawY = points.map((p) => Number(p.price_usd));
+    // Stronger smoothing: double centered moving average, wider window
+    const movingAverage = (arr, win) => {
+      const half = Math.floor(win / 2);
+      return arr.map((v, i) => {
+        let sum = 0;
+        let count = 0;
+        for (let k = -half; k <= half; k++) {
+          const idx = i + k;
+          if (idx >= 0 && idx < arr.length) {
+            sum += arr[idx];
+            count += 1;
+          }
+        }
+        return count > 0 ? sum / count : v;
+      });
+    };
+    const sm1 = movingAverage(rawY, 9);
+    const sm2 = movingAverage(sm1, 9);
+    // Downsample to reduce pointiness further
+    const desiredPoints = Math.min(24, sm2.length);
+    const step = Math.max(1, Math.ceil(sm2.length / Math.max(1, desiredPoints)));
+    const xs = [];
+    const ys = [];
+    for (let i = 0; i < sm2.length; i += step) {
+      xs.push(xsRaw[i]);
+      ys.push(sm2[i]);
+    }
     const minY = Math.min(...ys);
     const maxY = Math.max(...ys);
     const spanY = Math.max(0.01, maxY - minY);
@@ -126,7 +214,7 @@ export default function PriceTracker() {
     const change = last - first;
     const color = change >= 0 ? "#16a34a" : "#dc2626";
     return (
-      <svg viewBox={`0 0 ${w} ${h}`} className={cn("w-full", className)}>
+      <svg viewBox={`0 0 ${w} ${h}`} className={cn("w-full h-12", className)} preserveAspectRatio="none">
         {/* Baseline (first price) */}
         {typeof baselinePrice === 'number' && (
           <line x1={pad} x2={w - pad} y1={toY(baselinePrice)} y2={toY(baselinePrice)} stroke="#94a3b8" strokeDasharray="1 3" strokeWidth="1" strokeOpacity="0.8" />
@@ -135,8 +223,8 @@ export default function PriceTracker() {
         {typeof targetPrice === 'number' && (
           <line x1={pad} x2={w - pad} y1={toY(targetPrice)} y2={toY(targetPrice)} stroke="#7c3aed" strokeDasharray="1.5 3" strokeWidth="1" strokeOpacity="0.9" />
         )}
-        {/* Series line thinner for clarity */}
-        <path d={d} fill="none" stroke={color} strokeWidth="0.9" strokeOpacity="0.95" />
+        {/* Series line with rounded caps/joins for smoother look */}
+        <path d={d} fill="none" stroke={color} strokeWidth="1.1" strokeOpacity="0.95" strokeLinecap="round" strokeLinejoin="round" />
         {xs.map((_, idx) => idx === xs.length - 1 ? (
           <circle key={idx} cx={toX(idx)} cy={toY(ys[idx])} r="1.8" fill={color} fillOpacity="0.95" />
         ) : null)}
@@ -297,6 +385,12 @@ export default function PriceTracker() {
       if (!res.ok || !data?.ok) throw new Error(data?.error || 'Failed to add');
       setForm({ canonical_id: "", target_price: "" });
       setParsed(null);
+      // Mark this canonical as newly added to show only the initial point on the chart
+      setNewlyAdded((prev) => {
+        const next = { ...prev, [canonical]: true };
+        try { localStorage.setItem(NEWLY_ADDED_STORAGE_KEY, JSON.stringify(next)); } catch {}
+        return next;
+      });
       await loadWatches();
       await loadMatches();
     } catch (e) {
@@ -341,9 +435,21 @@ export default function PriceTracker() {
     setLoading(true);
     setError("");
     try {
+      // capture canonical before delete to clean up newlyAdded map
+      const watch = (watches || []).find((w) => w.id === id);
+      const canonical = watch?.canonical_id;
       const res = await fetch(`${baseUrl}/price-protection/watch/${id}`, { method: 'DELETE' });
       const data = await res.json();
       if (!res.ok || !data?.ok) throw new Error(data?.error || 'Failed to delete');
+      if (canonical) {
+        setNewlyAdded((prev) => {
+          if (!prev[canonical]) return prev;
+          const next = { ...prev };
+          delete next[canonical];
+          try { localStorage.setItem(NEWLY_ADDED_STORAGE_KEY, JSON.stringify(next)); } catch {}
+          return next;
+        });
+      }
       await loadWatches();
       await loadMatches();
     } catch (e) {
@@ -352,6 +458,18 @@ export default function PriceTracker() {
       setLoading(false);
     }
   };
+
+  // Reconcile newlyAdded map to only include current watches
+  useEffect(() => {
+    try {
+      const setCanon = new Set((watches || []).map((w) => w.canonical_id));
+      const next = Object.fromEntries(Object.entries(newlyAdded).filter(([k]) => setCanon.has(k)));
+      if (JSON.stringify(next) !== JSON.stringify(newlyAdded)) {
+        setNewlyAdded(next);
+        localStorage.setItem(NEWLY_ADDED_STORAGE_KEY, JSON.stringify(next));
+      }
+    } catch {}
+  }, [JSON.stringify(watches), JSON.stringify(newlyAdded)]);
 
   return (
     <div className="min-h-screen bg-white p-6">
@@ -436,16 +554,16 @@ export default function PriceTracker() {
                   url: 'https://www.amazon.com/Apple-AirPods-Pro-2nd-Gen/dp/B0D1R4ZQ9S/',
                 },
                 {
-                  label: 'Amazon – Kindle Paperwhite',
-                  url: 'https://www.amazon.com/All-new-Kindle-Paperwhite-adjustable-Waterproof/dp/B08KTZ8249/',
+                  label: 'Amazon – Sony WH-1000XM5',
+                  url: 'https://www.amazon.com/Sony-WH-1000XM5-Canceling-Headphones-Hands-Free/dp/B09XS7JWHH/',
                 },
                 {
-                  label: 'Target – Apple Watch SE',
-                  url: 'https://www.target.com/p/apple-watch-se-gps-40mm-aluminum-case-with-sport-band/-/A-84680346',
+                  label: 'Target – Nintendo Switch OLED',
+                  url: 'https://www.target.com/p/nintendo-switch-oled-model-with-white-joy-con-controllers/-/A-84680346',
                 },
                 {
-                  label: 'Walmart – Nintendo Switch',
-                  url: 'https://www.walmart.com/ip/Nintendo-Switch-with-Neon-Blue-and-Neon-Red-Joy-Con/554499512',
+                  label: 'Walmart – Instant Pot Duo 7-in-1',
+                  url: 'https://www.walmart.com/ip/Instant-Pot-Duo-7-in-1-Electric-Pressure-Cooker-6-Quart/554499512',
                 },
               ].map((q) => (
                 <button
@@ -469,64 +587,6 @@ export default function PriceTracker() {
 
         <div className="bg-white rounded-3xl p-6 border border-gray-100">
           <h2 className="text-xl font-light text-gray-900 mb-4">Your watches</h2>
-          <div className="flex items-center gap-2 mb-4">
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={async () => {
-                try {
-                  // Demo canonical IDs
-                  const demos = [
-                    { canonical: '44:B0BHTZCXZL', note: 'Noise Cancelling Headphones' },
-                    { canonical: '12:84680346', note: 'Apple Watch SE' },
-                    { canonical: '45:554499512', note: 'Nintendo Switch' },
-                  ];
-                  const existing = new Set((watches || []).map((w) => w.canonical_id));
-                  for (const d of demos) {
-                    if (existing.has(d.canonical)) continue;
-                    await fetch(`${baseUrl}/price-protection/watch`, {
-                      method: 'POST',
-                      headers: { 'Content-Type': 'application/json' },
-                      body: JSON.stringify({
-                        external_user_id: externalUserId,
-                        canonical_id: d.canonical,
-                        note: d.note,
-                      })
-                    });
-                  }
-                  await loadWatches();
-                  // Seed history for this user
-                  await fetch(`${baseUrl}/price-history/seed_demo`, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ points: 48, days: 365, jitter_pct: 0.35, external_user_id: externalUserId })
-                  });
-                  setHistory({});
-                } catch {}
-              }}
-              className="inline-flex items-center gap-2"
-            >
-              Add demo watches
-            </Button>
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={async () => {
-                try {
-                  await fetch(`${baseUrl}/price-history/seed_demo`, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ points: 40, days: 365, jitter_pct: 0.3, external_user_id: externalUserId })
-                  });
-                  // refresh history after seeding
-                  setHistory({});
-                } catch {}
-              }}
-              className="inline-flex items-center gap-2"
-            >
-              Seed demo history
-            </Button>
-          </div>
           {loading ? (
             <div className="grid gap-4">
               {Array.from({ length: 4 }).map((_, i) => (
@@ -536,7 +596,7 @@ export default function PriceTracker() {
           ) : watches.length ? (
             <div className="grid gap-3">
               {watches.map((w) => (
-                <div key={w.id} className="flex items-center justify-between p-4 bg-gray-50 rounded-xl border border-gray-100">
+                <div key={w.id} className="flex items-center justify-between p-4 bg-white rounded-2xl border border-gray-100 shadow-sm">
                   <div className="min-w-0 flex-1">
                     <p className="font-medium text-gray-900 truncate">
                       {watchMeta[w.id]?.title || w.note || w.canonical_id || 'Tracked item'}
@@ -544,28 +604,46 @@ export default function PriceTracker() {
                         <span className="ml-2 text-gray-700">— ${Number(watchMeta[w.id].priceUsd).toFixed(2)}</span>
                       )}
                     </p>
-                    {w.canonical_id && (
-                      <p className="text-xs text-gray-400 truncate">{w.canonical_id}</p>
-                    )}
-                    <p className="text-xs text-gray-500">Added {new Date(w.created_at).toLocaleString()}</p>
-                    <div className="mt-2 pr-4">
-                      {(() => {
-                        const pts = history[w.canonical_id] || [];
-                        const baseline = pts.length ? Number(pts[0].price_usd) : undefined;
-                        const tprice = typeof w.target_price_cents === 'number' ? w.target_price_cents / 100.0 : undefined;
-                        return (
-                          <PriceLineChart
-                            points={pts}
-                            baselinePrice={baseline}
-                            targetPrice={tprice}
-                          />
-                        );
-                      })()}
-                    </div>
+                    {(() => {
+                      const textBlock = (
+                        <div className="min-w-0">
+                          {w.canonical_id && (
+                            <p className="text-xs text-gray-400 truncate">{w.canonical_id}</p>
+                          )}
+                          <p className="text-xs text-gray-500">Added {new Date(w.created_at).toLocaleString()}</p>
+                        </div>
+                      );
+                      const chartBlock = (
+                        <div className="h-12 w-48 overflow-hidden rounded-lg border border-gray-200 bg-white ml-3 flex-shrink-0">
+                          {(() => {
+                            const pts = history[w.canonical_id] || [];
+                            const displayPts = newlyAdded[w.canonical_id]
+                              ? (pts.length ? [pts[pts.length - 1]] : [])
+                              : pts;
+                            const baseline = pts.length ? Number(pts[0].price_usd) : undefined;
+                            const tprice = typeof w.target_price_cents === 'number' ? w.target_price_cents / 100.0 : undefined;
+                            return (
+                              <PriceLineChart
+                                points={displayPts}
+                                baselinePrice={baseline}
+                                targetPrice={tprice}
+                                className="h-full"
+                              />
+                            );
+                          })()}
+                        </div>
+                      );
+                      return (
+                        <div className="mt-1 flex items-center justify-between gap-4">
+                          {textBlock}
+                          {chartBlock}
+                        </div>
+                      );
+                    })()}
                   </div>
-                  <div className="flex items-center gap-4">
-                    <div className="text-sm text-gray-900">{w.target_price_cents != null ? `$${(w.target_price_cents/100).toFixed(2)}` : '—'}</div>
-                    <Button variant="outline" onClick={() => deleteWatch(w.id)} disabled={loading} className="inline-flex items-center gap-2">
+                  <div className="flex items-center gap-3">
+                    <div className="text-xs text-gray-900">{w.target_price_cents != null ? `$${(w.target_price_cents/100).toFixed(2)}` : '—'}</div>
+                    <Button variant="outline" size="sm" onClick={() => deleteWatch(w.id)} disabled={loading} className="inline-flex items-center gap-2 h-8 px-2 rounded-xl">
                       <Trash2 className="w-4 h-4" /> Remove
                     </Button>
                   </div>

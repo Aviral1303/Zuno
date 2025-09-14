@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import { Target, Search, Filter, ShoppingBag, Link as LinkIcon, Shield, PlusCircle, CheckCircle2 } from "lucide-react";
+import { Target, Search, Filter, ShoppingBag, Link as LinkIcon, PlusCircle, CheckCircle2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 
@@ -11,12 +11,7 @@ export default function DealHunter() {
   const [loading, setLoading] = useState(false);
   const [results, setResults] = useState([]);
   const [error, setError] = useState("");
-  const [knotInitialized, setKnotInitialized] = useState(false);
-  const [amazonConnected, setAmazonConnected] = useState(false);
-  const [knotClient, setKnotClient] = useState(null);
-  const [sessionId, setSessionId] = useState(null);
-  const [transactions, setTransactions] = useState([]);
-  const [loadingTransactions, setLoadingTransactions] = useState(false);
+  
   const [trackLoading, setTrackLoading] = useState({});
   const [trackedKeys, setTrackedKeys] = useState(new Set());
   const useWebSearch = true;
@@ -27,95 +22,7 @@ export default function DealHunter() {
     .filter(([, v]) => !!v)
     .map(([k]) => Number(k));
 
-  // Initialize Knot Web SDK (load script only once)
-  useEffect(() => {
-    const loadSdk = () => new Promise((resolve, reject) => {
-      if (window.KnotapiJS) return resolve();
-      const script = document.createElement('script');
-      script.src = 'https://unpkg.com/knotapi-js@next';
-      script.onload = () => resolve();
-      script.onerror = () => reject(new Error('Failed to load Knot Web SDK'));
-      document.head.appendChild(script);
-    });
-
-    const bootstrap = async () => {
-      try {
-        await loadSdk();
-        setKnotInitialized(true);
-        if (window.KnotapiJS && !knotClient) {
-          const KnotapiJS = window.KnotapiJS.default;
-          const client = new KnotapiJS();
-          setKnotClient(client);
-        }
-      } catch (err) {
-        setError(err.message);
-      }
-    };
-
-    bootstrap();
-  }, [knotClient]);
-
-  const openKnot = async () => {
-    try {
-      // ask backend to create a session (transaction_link)
-      const res = await fetch(`${baseUrl}/knot/session/create`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ type: 'transaction_link', external_user_id: 'zuno_user_123' })
-      });
-      const data = await res.json();
-      if (!data.success) throw new Error(data.error || 'Failed to create session');
-
-      const session = data.session;
-      const sid = session.id || session.session_id || session.session?.id;
-      const cid = data.client_id;
-      setSessionId(sid);
-
-      if (!window.KnotapiJS) throw new Error('Knot SDK not loaded');
-      const KnotapiJS = window.KnotapiJS.default;
-      const client = knotClient || new KnotapiJS();
-
-      client.open({
-        sessionId: sid,
-        clientId: cid,
-        environment: 'development',
-        product: 'transaction_link',
-        merchantIds: selectedMerchantIds.length ? selectedMerchantIds : [44],
-        entryPoint: 'dealhunter',
-        onSuccess: (product, details) => {
-          console.log('onSuccess', product, details);
-          setAmazonConnected(true);
-          // pro-actively sync right after success
-          fetch(`${baseUrl}/knot/transactions/sync`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              session_id: sid,
-              merchant_id: 44,
-              external_user_id: 'zuno_user_123',
-              limit: 50
-            })
-          }).catch(() => {});
-        },
-        onError: (product, errorCode, message) => {
-          console.log('onError', product, errorCode, message);
-          setError(message || 'Knot error');
-        },
-        onEvent: (product, event, merchant, merchantId, payload, taskId) => {
-          console.log('onEvent', product, event, merchant, merchantId, payload, taskId);
-          if (event === 'AUTHENTICATED') setAmazonConnected(true);
-        },
-        onExit: (product) => {
-          console.log('onExit', product);
-        }
-      });
-
-      if (!knotClient) setKnotClient(client);
-    } catch (err) {
-      console.error('Failed to open Knot:', err);
-      setError(err.message);
-    }
-  };
+  // Knot linking removed from Deal Hunter (available in Knot Sync)
 
   const trackKeyForItem = (item) => `${item.merchant_id || 'm'}::${item.external_id || item.url || item.title}`;
 
@@ -147,57 +54,9 @@ export default function DealHunter() {
     }
   };
 
-  const authenticateAmazon = async () => {
-    if (sessionId) {
-      try {
-        // For now, we'll simulate Amazon authentication
-        // In a real implementation, this would trigger the Knot authentication flow
-        setAmazonConnected(true);
-        console.log('Amazon authentication simulated (backend integration needed)');
-      } catch (error) {
-        console.error('Amazon authentication failed:', error);
-        setError('Amazon authentication failed');
-      }
-    }
-  };
+  
 
-  const fetchAmazonTransactions = async () => {
-    setLoadingTransactions(true);
-    setError("");
-    
-    try {
-      const params = new URLSearchParams({
-        external_user_id: 'zuno_user_123',
-        merchant_id: '44',
-        limit: '50'
-      });
-      if (sessionId) params.set('session_id', sessionId);
-      // Temporary: allow mock fallback during sandbox
-      params.set('mock', '1');
-      const response = await fetch(`${baseUrl}/knot/amazon/transactions?${params.toString()}`, {
-        method: 'GET',
-        headers: { 'Content-Type': 'application/json' }
-      });
-      
-      const data = await response.json();
-      console.log('Amazon transactions response:', data);
-      
-      if (data.ok && data.data) {
-        // Extract transactions from the response
-        const transactionData = data.data;
-        const transactionsList = transactionData.transactions || transactionData.data?.transactions || [];
-        setTransactions(transactionsList);
-        setAmazonConnected(true);
-      } else {
-        setError(`Failed to fetch transactions: ${data.error || 'Unknown error'}`);
-      }
-    } catch (error) {
-      console.error('Failed to fetch Amazon transactions:', error);
-      setError(`Failed to fetch Amazon transactions: ${error.message}`);
-    } finally {
-      setLoadingTransactions(false);
-    }
-  };
+  
 
   const enrichMissingPrices = async (items) => {
     try {
@@ -236,31 +95,16 @@ export default function DealHunter() {
     setResults([]);
     
     try {
-      // First, sync transactions if we have a session
-      if (sessionId) {
-        try {
-          await fetch(`${baseUrl}/knot/transactions/sync`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              session_id: sessionId,
-              merchant_id: 44, // Amazon
-              external_user_id: 'zuno_user_123'
-            })
-          });
-        } catch (syncError) {
-          console.warn('Transaction sync failed, continuing with search:', syncError);
-        }
-      }
+      
 
       const budgetNum = Number(budget);
       const budgetCents = !Number.isNaN(budgetNum) && budgetNum > 0 ? Math.round(budgetNum * 100) : undefined;
 
       if (useWebSearch) {
-        const res = await fetch(`${baseUrl}/dealhunter/claude_search`, {
+        const res = await fetch(`${baseUrl}/dealhunter/rag_search`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ query, budget_cents: budgetCents, max_results: 9 }),
+          body: JSON.stringify({ query, budget_cents: budgetCents, max_results: 9, external_user_id: 'zuno_user_123' }),
         });
         const data = await res.json();
         if (!res.ok) throw new Error(data?.error || 'Web search failed');
@@ -317,27 +161,7 @@ export default function DealHunter() {
             <Target className="w-10 h-10 text-white" />
           </div>
           <h1 className="text-4xl font-light text-gray-900 mb-2">Deal Hunter</h1>
-          <p className="text-base text-gray-600">Search recent products from linked merchants via Knot and get concise AI explanations.</p>
-          
-          {/* Knot Status Indicator */}
-          <div className="mt-4 flex items-center justify-center gap-2 text-sm">
-            {knotInitialized ? (
-              <span className="flex items-center gap-1 text-green-600">
-                <Shield className="w-4 h-4" />
-                Knot API Connected
-              </span>
-            ) : error ? (
-              <span className="flex items-center gap-1 text-red-600">
-                <Shield className="w-4 h-4" />
-                Knot API Error
-              </span>
-            ) : (
-              <span className="flex items-center gap-1 text-gray-500">
-                <Shield className="w-4 h-4" />
-                Connecting to Knot API...
-              </span>
-            )}
-          </div>
+          <p className="text-base text-gray-600">Search recent products and get concise AI explanations.</p>
         </motion.div>
 
         {/* Search form */}
@@ -376,28 +200,6 @@ export default function DealHunter() {
           </div>
 
           <div className="mt-4 flex flex-wrap items-center gap-3 text-sm">
-            {knotInitialized && (
-              <>
-                <Button 
-                  onClick={openKnot}
-                  variant="secondary"
-                  size="sm"
-                  className="ml-2 text-xs"
-                >
-                  <LinkIcon className="w-3 h-3 mr-1" /> Link via Knot
-                </Button>
-                <Button 
-                  onClick={fetchAmazonTransactions}
-                  variant="outline"
-                  size="sm"
-                  className="ml-2 text-xs"
-                  disabled={loadingTransactions}
-                >
-                  <Shield className="w-3 h-3 mr-1" />
-                  {loadingTransactions ? "Loading..." : "Get Amazon Transactions"}
-                </Button>
-              </>
-            )}
             <label className="flex items-center gap-2 cursor-pointer select-none ml-auto">
               <input type="checkbox" checked={useWebSearch} onChange={() => setUseWebSearch((v) => !v)} />
               <span>Use web search (Claude)</span>
@@ -498,54 +300,7 @@ export default function DealHunter() {
           </div>
         )}
 
-        {/* Amazon Transactions Display */}
-        {transactions.length > 0 && (
-          <div className="mt-8">
-            <h2 className="text-2xl font-light text-gray-900 mb-4">Amazon Transaction History</h2>
-            <div className="bg-white rounded-2xl border border-gray-100 p-6">
-              <div className="grid gap-4">
-                {transactions.slice(0, 10).map((transaction, index) => (
-                  <motion.div
-                    key={index}
-                    initial={{ opacity: 0, y: 12 }}
-                    animate={{ opacity: 1, y: 0 }}
-                    transition={{ duration: 0.25, delay: index * 0.05 }}
-                    className="flex items-center justify-between p-4 bg-gray-50 rounded-xl border border-gray-100"
-                  >
-                    <div className="flex-1">
-                      <h3 className="font-medium text-gray-900">
-                        {transaction.products?.[0]?.name || transaction.description || "Amazon Purchase"}
-                      </h3>
-                      <p className="text-sm text-gray-500">
-                        {transaction.datetime ? new Date(transaction.datetime).toLocaleDateString() : "Unknown Date"}
-                      </p>
-                      {transaction.products && transaction.products.length > 0 && (
-                        <p className="text-xs text-gray-400 mt-1">
-                          {transaction.products.length} item(s)
-                        </p>
-                      )}
-                    </div>
-                    <div className="text-right">
-                      <div className="font-semibold text-gray-900">
-                        {transaction.price?.total ? `$${parseFloat(transaction.price.total).toFixed(2)}` : "—"}
-                      </div>
-                      {transaction.price?.adjustments && transaction.price.adjustments.length > 0 && (
-                        <div className="text-xs text-green-600">
-                          {transaction.price.adjustments.filter(a => a.type === 'DISCOUNT').length} discount(s)
-                        </div>
-                      )}
-                    </div>
-                  </motion.div>
-                ))}
-              </div>
-              {transactions.length > 10 && (
-                <p className="text-sm text-gray-500 mt-4 text-center">
-                  Showing first 10 of {transactions.length} transactions
-                </p>
-              )}
-            </div>
-          </div>
-        )}
+        {/* Knot linking and Amazon transaction display removed from Deal Hunter */}
       </div>
     </div>
   );

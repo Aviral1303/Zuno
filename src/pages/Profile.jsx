@@ -52,11 +52,19 @@ export default function Profile() {
 
   useEffect(() => {
     if (user) {
+      const defaultIncome = (profile && profile.income_amount != null && profile.income_amount !== '') 
+        ? profile.income_amount 
+        : 1000;
+      const defaultIncomeType = (profile && profile.income_type) ? profile.income_type : 'monthly';
+      const defaultBudget = (profile && profile.monthly_budget != null && profile.monthly_budget !== '')
+        ? profile.monthly_budget
+        : 2000;
+
       setFormData({
         full_name: user.user_metadata?.full_name || '',
-        income_amount: profile?.income_amount || '',
-        income_type: profile?.income_type || 'monthly',
-        monthly_budget: profile?.monthly_budget || '',
+        income_amount: String(defaultIncome),
+        income_type: defaultIncomeType,
+        monthly_budget: String(defaultBudget),
         shopping_preferences: profile?.shopping_preferences || [],
         notification_preferences: profile?.notification_preferences || {
           price_drops: true,

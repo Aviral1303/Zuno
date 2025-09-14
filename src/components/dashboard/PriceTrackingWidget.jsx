@@ -136,7 +136,7 @@ const PriceTrackingWidget = ({ watches = [], matches = [] }) => {
     <motion.div
       initial={{ opacity: 0, y: 20 }}
       animate={{ opacity: 1, y: 0 }}
-      className="bg-white rounded-3xl p-6 shadow-sm border border-gray-100"
+      className="bg-white rounded-3xl p-6 shadow-sm border border-gray-100 max-h-[760px] overflow-y-auto"
     >
       <div className="flex items-center justify-between mb-6">
         <div className="flex items-center gap-3">
@@ -214,7 +214,7 @@ const PriceTrackingWidget = ({ watches = [], matches = [] }) => {
         
         <div className="space-y-3">
           <AnimatePresence>
-            {priceWatches.slice(0, 5).map((watch, index) => (
+            {priceWatches.slice(0, 4).map((watch, index) => (
               <motion.div
                 key={watch.id}
                 initial={{ opacity: 0, x: -20 }}
@@ -273,7 +273,7 @@ const PriceTrackingWidget = ({ watches = [], matches = [] }) => {
         
         <div className="space-y-3">
           <AnimatePresence>
-            {priceMatches.slice(0, 5).map((match, index) => {
+            {priceMatches.slice(0, 4).map((match, index) => {
               const watch = priceWatches.find(w => w.id === match.watch_id);
               const status = getMatchStatus(watch, match);
               

@@ -21,6 +21,7 @@ import MinimalDealsSection from "../components/dashboard/MinimalDealsSection";
 import Spendometer from "../components/dashboard/Spendometer";
 import TransactionVisualization from "../components/dashboard/TransactionVisualization";
 import PriceTrackingWidget from "../components/dashboard/PriceTrackingWidget";
+import AIInteractionPanel from "../components/dashboard/AIInteractionPanel";
 import SubscriptionAuditWidget from "../components/dashboard/SubscriptionAuditWidget";
 import DealRecommendationsWidget from "../components/dashboard/DealRecommendationsWidget";
 import { summarizeTransactions, loadBudgetSnapshot } from "@/lib/analytics";
@@ -107,6 +108,17 @@ export default function Dashboard() {
       const data = await res.json();
       const allTransactions = (data && data.data && data.data.transactions) ? data.data.transactions : [];
       setTransactions(allTransactions);
+
+      // Ingest transactions into RAG store for personalized Deal Hunter queries
+      try {
+        await fetch(`${baseUrl}/rag/ingest_transactions`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ external_user_id: 'zuno_user_123', transactions: allTransactions })
+        });
+      } catch (e) {
+        console.warn('RAG ingest failed', e);
+      }
 
       // Summarize spending patterns for current month
       const summary = summarizeTransactions(allTransactions);
@@ -370,6 +382,11 @@ export default function Dashboard() {
             </div>
           </div>
         </motion.div>
+
+        {/* Central AI Panel */}
+        <div className="mb-8">
+          <AIInteractionPanel />
+        </div>
 
         {/* Main Dashboard Grid */}
         <div className="grid lg:grid-cols-3 gap-8">

@@ -11,7 +11,8 @@ import {
   Gift,
   Calendar,
   CreditCard,
-  Search
+  Search,
+  PlugZap
 } from "lucide-react";
 import {
   Sidebar,
@@ -82,10 +83,10 @@ const aiAgents = [
     description: "AI shopping assistant"
   },
   {
-    title: "Gift Planner",
+    title: "Knot Sync",
     url: createPageUrl("GiftPlanner"),
-    icon: Gift,
-    description: "Smart gift recommendations"
+    icon: PlugZap,
+    description: "Sync with Knot API"
   },
   {
     title: "Spending Tracker",

@@ -25,6 +25,7 @@ import re
 import html as htmllib
 import json
 import random
+import math
 from datetime import datetime, timedelta, timezone
 from collections import defaultdict
 from apscheduler.schedulers.background import BackgroundScheduler
@@ -57,6 +58,212 @@ logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
 CORS(app, resources={r"/*": {"origins": "*"}})
+
+# -------------------------------------------------
+# Lightweight RAG store for Deal Hunter personalization
+# -------------------------------------------------
+RAG_STORE: dict[str, list[str]] = {}
+
+def _chunk_transactions(transactions: list[dict], max_chars: int = 450) -> list[str]:
+    """Create simple textual chunks from transaction dicts.
+    Groups by merchant and month to keep chunks relevant and short.
+    """
+    try:
+        from collections import defaultdict
+        from datetime import datetime
+    except Exception:
+        return []
+    by_key = defaultdict(list)
+    for t in transactions or []:
+        merchant_name = None
+        m = t.get("merchant") or {}
+        if isinstance(m, dict):
+            merchant_name = m.get("name") or m.get("merchant_name")
+        elif m:
+            merchant_name = str(m)
+        merchant_name = merchant_name or (t.get("retailer") or t.get("brand") or "Unknown")
+        ts = t.get("datetime") or t.get("ts") or t.get("date") or ""
+        try:
+            dt = datetime.fromisoformat(str(ts).replace("Z","+00:00"))
+            key_month = dt.strftime("%Y-%m")
+        except Exception:
+            key_month = "unknown"
+        key = f"{merchant_name}:{key_month}"
+        title = None
+        if t.get("products") and isinstance(t["products"], list) and t["products"]:
+            title = t["products"][0].get("name")
+        title = title or t.get("description") or t.get("title") or "Purchase"
+        total = None
+        p = t.get("price") or {}
+        if isinstance(p, dict):
+            total = p.get("total")
+        if total is None and isinstance(t.get("price_total"), (int,float)):
+            total = t.get("price_total")
+        by_key[key].append({"title": title, "total": total, "raw": t})
+
+    chunks: list[str] = []
+    for key, items in by_key.items():
+        merchant, month = key.split(":", 1)
+        lines = [f"Merchant: {merchant}", f"Month: {month}"]
+        subtotal = 0.0
+        for it in items:
+            ttl = it.get("title")
+            amt = it.get("total")
+            if isinstance(amt, str):
+                try:
+                    amt = float(amt.replace("$", ""))
+                except Exception:
+                    amt = None
+            if isinstance(amt, (int,float)):
+                subtotal += float(amt)
+                lines.append(f"- {ttl} (${float(amt):.2f})")
+            else:
+                lines.append(f"- {ttl}")
+            if sum(len(x)+1 for x in lines) > max_chars:
+                break
+        lines.append(f"Subtotal: ${subtotal:.2f}")
+        chunk = "\n".join(lines)
+        chunks.append(chunk[:max_chars])
+    return chunks[:50]
+
+@app.route('/rag/ingest_transactions', methods=['POST'])
+def rag_ingest_transactions():
+    try:
+        data = request.get_json() or {}
+        external_user_id = data.get('external_user_id') or 'zuno_user_123'
+        transactions = data.get('transactions') or []
+        chunks = _chunk_transactions(transactions)
+        RAG_STORE[external_user_id] = chunks
+        return jsonify({"ok": True, "external_user_id": external_user_id, "chunks": len(chunks)})
+    except Exception as e:
+        logger.error(f"rag_ingest failed: {e}")
+        return jsonify({"error": str(e)}), 500
+
+@app.route('/dealhunter/rag_search', methods=['POST'])
+def dealhunter_rag_search():
+    """RAG-augmented search: use stored chunks as context to expand the query, then call dealhunter/claude_search."""
+    try:
+        data = request.get_json() or {}
+        external_user_id = data.get('external_user_id') or 'zuno_user_123'
+        query = (data.get('query') or '').strip()
+        budget_cents = data.get('budget_cents')
+        max_results = int(data.get('max_results') or 6)
+        if not query:
+            return jsonify({"error": "missing query"}), 400
+        chunks = RAG_STORE.get(external_user_id) or []
+        base = os.getenv('SELF_BASE_URL') or 'http://localhost:5001'
+
+        # If query is vague (e.g., "suggest me something"), prefer picking 1-2 items from history (Amazon) and searching for those
+        def _is_vague(q: str) -> bool:
+            ql = (q or '').lower().strip()
+            phrases = [
+                'suggest me something', 'something i like', 'say me something i like', 'sayme something i like',
+                'recommend me', 'what should i buy', 'show me something', 'anything good', 'anything i like'
+            ]
+            if any(p in ql for p in phrases):
+                return True
+            # Short/ambiguous queries
+            return len(ql.split()) <= 2
+
+        def _fetch_mock_amazon_transactions(external_user_id: str) -> list:
+            try:
+                params = {
+                    'external_user_id': external_user_id,
+                    'merchant_id': '44',
+                    'limit': '50',
+                    'mock': '1'
+                }
+                res = requests.get(f"{base}/knot/amazon/transactions", params=params, timeout=20)
+                js = res.json() if res.status_code == 200 else {}
+                data = js.get('data') or {}
+                return data.get('transactions') or data.get('data', {}).get('transactions') or []
+            except Exception:
+                return []
+
+        if _is_vague(query):
+            # Build a concise history context from chunks and/or mock Amazon transactions
+            tx = _fetch_mock_amazon_transactions(external_user_id)
+            # Create a compact product list for LLM selection
+            items_lines = []
+            seen = set()
+            for t in tx[:30]:
+                name = None
+                if isinstance(t.get('products'), list) and t['products']:
+                    name = t['products'][0].get('name')
+                name = name or t.get('description') or 'Purchase'
+                key = name.strip().lower()
+                if key in seen:
+                    continue
+                seen.add(key)
+                items_lines.append(f"- {name}")
+                if len(items_lines) >= 12:
+                    break
+
+            llm = get_llm()
+            system_pick = (
+                "You are a shopping assistant. From the user's recent purchase list, pick up to TWO concrete search queries "
+                "(specific product/category + brand/model) that reflect their tastes. Prefer Amazon-relevant queries. "
+                "Return STRICT JSON array of up to 2 strings. No commentary."
+            )
+            human_pick = (
+                f"User vague request: '{query}'.\nRecent items:\n" + "\n".join(items_lines) + "\n\nQueries JSON:"
+            )
+            picked_queries = []
+            try:
+                resp_pick = llm.invoke([SystemMessage(content=system_pick), HumanMessage(content=human_pick)])
+                txt = resp_pick.content if hasattr(resp_pick, 'content') else str(resp_pick)
+                arr = json.loads(txt)
+                if isinstance(arr, list):
+                    picked_queries = [str(x).strip() for x in arr if str(x).strip()][:2]
+            except Exception:
+                picked_queries = []
+            # Fallback: use top two names
+            if not picked_queries:
+                picked_queries = [ln[2:].strip() for ln in items_lines[:2]]
+
+            # Search Brave for each picked query and aggregate up to max_results
+            combined = []
+            for pq in picked_queries:
+                try:
+                    rs = requests.post(f"{base}/dealhunter/claude_search", json={
+                        "query": pq, "budget_cents": budget_cents, "max_results": max(1, max_results // len(picked_queries) or 1)
+                    }, timeout=30)
+                    js = rs.json() if rs.status_code == 200 else {"items": []}
+                    for it in js.get('items', [])[:2]:
+                        combined.append(it)
+                except Exception:
+                    continue
+            return jsonify({"ok": True, "count": len(combined), "items": combined, "rag": {"used": True, "strategy": "history_pick", "picked": picked_queries}})
+
+        # Ask LLM to expand the query given chunks
+        llm = get_llm()
+        context_snippets = "\n\n".join(chunks[:8])
+        system = (
+            "You are a shopping assistant that crafts a SEARCH QUERY for a shopping engine. "
+            "Goals: (1) Personalize using the user's purchase history; (2) Expand vague prompts like 'suggest me something' or 'something I like' into concrete product categories/brands/models; "
+            "(3) Prefer trusted merchants (Amazon, Target, Walmart) when possible; (4) Keep it concise and useful for web search; (5) Respect budget if provided. "
+            "Return ONLY the expanded query string (10-16 words). No commentary."
+        )
+        human = (
+            f"User query: '{query}'.\n\nPurchase history context (recent merchants/items and months):\n{context_snippets}\n\n"
+            f"If the user's query is vague (e.g., 'suggest me something', 'something I like'), infer categories/brands from the context. "
+            f"If Amazon appears frequently, bias toward Amazon-relevant brands/items. \n\nExpanded query:"
+        )
+        resp = llm.invoke([SystemMessage(content=system), HumanMessage(content=human)])
+        expanded = (resp.content if hasattr(resp, 'content') else str(resp)).strip()
+        if len(expanded) < 4:
+            expanded = query
+
+        base = os.getenv('SELF_BASE_URL') or 'http://localhost:5001'
+        rs = requests.post(f"{base}/dealhunter/claude_search", json={
+            "query": expanded, "budget_cents": budget_cents, "max_results": max_results
+        }, timeout=30)
+        out = rs.json()
+        out['rag'] = {"used": True, "expanded_query": expanded, "chunks_used": min(8, len(chunks))}
+        return jsonify(out), rs.status_code
+    except Exception as e:
+        logger.error(f"rag_search failed: {e}")
+        return jsonify({"error": str(e)}), 500
 
 # Global variables for model and processor
 processor = None
@@ -1373,12 +1580,30 @@ def price_history_seed_demo():
         now = datetime.utcnow()
         seeded = 0
         for _, canonical, note in watches:
+            # Choose a realistic base price
             base = random.uniform(20.0, 400.0)
+            # Pick a gentle long-term drift: slight downtrend or flat
+            trend_direction = random.choice([-1, 0])
+            drift_pct = 0.03 if trend_direction == -1 else 0.0  # up to ~3% decline over the year
+            # Seasonal amplitude small to avoid big swings
+            seasonal_amp = random.uniform(0.01, 0.05)  # 1% - 5%
+            # One-time sale drop somewhere in the series
+            sale_idx = random.randint(int(num_points * 0.3), int(num_points * 0.9)) if num_points >= 10 else None
+            sale_drop_pct = random.uniform(0.05, 0.15)  # 5% - 15%
+
             for i in range(num_points):
-                # Spread points across the window, add sine wave + random jitter
                 t = i / max(1, num_points - 1)
-                price = base * (1.0 + 0.1 * (random.random() - 0.5) + 0.15 * (2.0 * (t - 0.5)))
-                price *= (1.0 + jitter_pct * (random.random() - 0.5))
+                # Long-term drift (monotonic slight decline if chosen)
+                drift = (1.0 - drift_pct * t)
+                # Mild seasonal pattern
+                seasonal = 1.0 + seasonal_amp * math.sin(2.0 * math.pi * t)
+                price = base * drift * seasonal
+                # Occasional small noise (very mild)
+                price *= (1.0 + min(0.02, jitter_pct) * (random.random() - 0.5))
+                # Apply a single sale drop point to make it look real
+                if sale_idx is not None and i == sale_idx:
+                    price *= (1.0 - sale_drop_pct)
+
                 ts = (now - timedelta(days=int(days * (1.0 - t)))).isoformat()
                 cur.execute(
                     "INSERT INTO price_history (canonical_id, price_cents, title, fetched_at) VALUES (?, ?, ?, ?)",
