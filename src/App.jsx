@@ -27,8 +27,14 @@ import {
   SidebarTrigger,
 } from "@/components/ui/sidebar";
 
+// Import authentication components
+import { AuthProvider } from "./contexts/AuthContext";
+import ProtectedRoute from "./components/ProtectedRoute";
+
 // Import all pages
 import Landing from "./pages/Landing";
+import SignUp from "./pages/SignUp";
+import SignIn from "./pages/SignIn";
 import Dashboard from "./pages/Dashboard";
 import Profile from "./pages/Profile";
 import Chat from "./pages/Chat";
@@ -99,8 +105,9 @@ const aiAgents = [
 function Layout({ children }) {
   const location = useLocation();
   const isLandingPage = location.pathname === '/';
+  const isAuthPage = ['/signin', '/signup'].includes(location.pathname);
 
-  if (isLandingPage) {
+  if (isLandingPage || isAuthPage) {
     return children;
   }
 
@@ -223,19 +230,58 @@ function Layout({ children }) {
 export default function App() {
   return (
     <Router>
-      <Layout>
-        <Routes>
-          <Route path="/" element={<Landing />} />
-          <Route path="/dashboard" element={<Dashboard />} />
-          <Route path="/profile" element={<Profile />} />
-          <Route path="/chat" element={<Chat />} />
-          <Route path="/deal-hunter" element={<DealHunter />} />
-          <Route path="/price-tracker" element={<PriceTracker />} />
-          <Route path="/gift-planner" element={<GiftPlanner />} />
-          <Route path="/budget-advisor" element={<BudgetAdvisor />} />
-          <Route path="/subscriptions" element={<Subscriptions />} />
-        </Routes>
-      </Layout>
+      <AuthProvider>
+        <Layout>
+          <Routes>
+            {/* Public routes */}
+            <Route path="/" element={<Landing />} />
+            <Route path="/signup" element={<SignUp />} />
+            <Route path="/signin" element={<SignIn />} />
+            
+            {/* Protected routes */}
+            <Route path="/dashboard" element={
+              <ProtectedRoute>
+                <Dashboard />
+              </ProtectedRoute>
+            } />
+            <Route path="/profile" element={
+              <ProtectedRoute>
+                <Profile />
+              </ProtectedRoute>
+            } />
+            <Route path="/chat" element={
+              <ProtectedRoute>
+                <Chat />
+              </ProtectedRoute>
+            } />
+            <Route path="/deal-hunter" element={
+              <ProtectedRoute>
+                <DealHunter />
+              </ProtectedRoute>
+            } />
+            <Route path="/price-tracker" element={
+              <ProtectedRoute>
+                <PriceTracker />
+              </ProtectedRoute>
+            } />
+            <Route path="/gift-planner" element={
+              <ProtectedRoute>
+                <GiftPlanner />
+              </ProtectedRoute>
+            } />
+            <Route path="/budget-advisor" element={
+              <ProtectedRoute>
+                <BudgetAdvisor />
+              </ProtectedRoute>
+            } />
+            <Route path="/subscriptions" element={
+              <ProtectedRoute>
+                <Subscriptions />
+              </ProtectedRoute>
+            } />
+          </Routes>
+        </Layout>
+      </AuthProvider>
     </Router>
   );
 }
