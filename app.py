@@ -17,7 +17,10 @@ from langchain_openai import ChatOpenAI
 from langchain.schema import HumanMessage, SystemMessage
 from openai import OpenAI
 import requests
+import re
+import html as htmllib
 import json
+import random
 from datetime import datetime, timedelta, timezone
 from collections import defaultdict
 from apscheduler.schedulers.background import BackgroundScheduler
@@ -645,6 +648,433 @@ def knot_merchants():
         ]
     })
 
+# --------------------------
+# Product resolver (URL → title/price)
+# --------------------------
+
+def _parse_product_url(url: str) -> dict:
+    try:
+        from urllib.parse import urlparse
+        pu = urlparse(url)
+        host = (pu.hostname or '').lower().replace('www.', '')
+        path = pu.path or ''
+
+        # Amazon
+        if 'amazon.' in host:
+            m = re.search(r'/(?:gp/product|dp)/([A-Z0-9]{10})', path, flags=re.I) or re.search(r'/([A-Z0-9]{10})(?:[/?]|$)', path, flags=re.I)
+            asin = (m.group(1).upper() if m else None)
+            return {"merchant_name": "Amazon", "merchant_id": 44, "product_id": asin}
+        # Target
+        if 'target.com' in host:
+            m = re.search(r'/A-(\d+)', path)
+            tid = m.group(1) if m else None
+            return {"merchant_name": "Target", "merchant_id": 12, "product_id": tid}
+        # Walmart
+        if 'walmart.com' in host:
+            parts = [p for p in path.split('/') if p]
+            last = parts[-1] if parts else ''
+            m = re.search(r'(\d+)', last)
+            wid = m.group(1) if m else None
+            return {"merchant_name": "Walmart", "merchant_id": 45, "product_id": wid}
+        # Fallback
+        return {"merchant_name": host, "merchant_id": None, "product_id": None}
+    except Exception:
+        return {"merchant_name": None, "merchant_id": None, "product_id": None}
+
+
+def _extract_title_and_price(html: str, merchant: str | None = None) -> tuple[str | None, float | None]:
+    title = None
+    price: float | None = None
+
+    try:
+        m = re.search(r'<meta[^>]+property=["\']og:title["\'][^>]+content=["\']([^"\']+)["\']', html, flags=re.I)
+        if m:
+            title = m.group(1).strip()
+        if not title:
+            m = re.search(r'<title>(.*?)</title>', html, flags=re.I | re.S)
+            if m:
+                title = re.sub(r'\s+', ' ', m.group(1)).strip()
+        if title:
+            title = htmllib.unescape(title)
+    except Exception:
+        pass
+
+    # Merchant-specific price extraction first (to avoid unrelated prices on long pages)
+    try:
+        mname = (merchant or '').lower()
+        if 'amazon' in mname:
+            # New PDP: apexPriceToPay -> span.a-offscreen
+            m = re.search(r'id=\"apexPriceToPay\"[\s\S]*?class=\"a-offscreen\">\s*\$([0-9,]+\.[0-9]{2})', html, flags=re.I)
+            if not m:
+                m = re.search(r'id=\"corePrice_feature_div\"[\s\S]*?class=\"a-offscreen\">\s*\$([0-9,]+\.[0-9]{2})', html, flags=re.I)
+            if not m:
+                m = re.search(r'id=\"priceblock_ourprice\"[^>]*>\s*\$([0-9,]+\.[0-9]{2})', html, flags=re.I)
+            if not m:
+                # JSON offers price
+                m = re.search(r'"offers"[\s\S]*?"price"\s*:\s*"([0-9,]+\.[0-9]{2})"', html, flags=re.I)
+            if m:
+                price = float(m.group(1).replace(',', ''))
+
+        elif 'target' in mname:
+            # Embedded JSON has current_retail
+            m = re.search(r'"current_retail"\s*:\s*([0-9]+(?:\.[0-9]{2})?)', html, flags=re.I)
+            if not m:
+                m = re.search(r'"offers"[\s\S]*?"price"\s*:\s*"?([0-9,]+\.?[0-9]{0,2})"?', html, flags=re.I)
+            if m:
+                price = float(m.group(1).replace(',', ''))
+            # Title from embedded product_description.title or JSON-LD Product name
+            if not title:
+                t = re.search(r'"product_description"[\s\S]*?"title"\s*:\s*"([^"\\]+)"', html, flags=re.I)
+                if t:
+                    title = htmllib.unescape(t.group(1)).strip()
+
+        elif 'walmart' in mname:
+            # priceInfo.currentPrice.price
+            m = re.search(r'"priceInfo"[\s\S]*?"currentPrice"[\s\S]*?"price"\s*:\s*([0-9]+(?:\.[0-9]{2})?)', html, flags=re.I)
+            if not m:
+                m = re.search(r'"currentPrice"[\s\S]*?"price"\s*:\s*([0-9]+(?:\.[0-9]{2})?)', html, flags=re.I)
+            if not m:
+                # aria-label on price-main
+                m = re.search(r'price-main[\s\S]*?aria-label=\"\$([0-9,]+\.[0-9]{2})\"', html, flags=re.I)
+            if m:
+                price = float(m.group(1).replace(',', ''))
+    except Exception:
+        pass
+
+    # Generic JSON-LD Offer fallback
+    if price is None:
+        try:
+            m = re.search(r'"@type"\s*:\s*"Offer"[\s\S]*?"price"\s*:\s*"([0-9][\d\.,]*)"', html, flags=re.I)
+            if m:
+                price = float(m.group(1).replace(',', ''))
+        except Exception:
+            pass
+
+    # Generic Product title via JSON-LD
+    if not title:
+        try:
+            t = re.search(r'"@type"\s*:\s*"Product"[\s\S]*?"name"\s*:\s*"([^"\\]+)"', html, flags=re.I)
+            if t:
+                title = htmllib.unescape(t.group(1)).strip()
+        except Exception:
+            pass
+
+    # Last resort: first visible $xx.xx near product section — very heuristic; avoid if possible
+    if price is None:
+        try:
+            m = re.search(r'\$\s*([0-9]{1,3}(?:,[0-9]{3})*(?:\.[0-9]{2}))', html)
+            if m:
+                price = float(m.group(1).replace(',', ''))
+        except Exception:
+            pass
+
+    return title, price
+
+
+@app.route('/product/resolve', methods=['POST'])
+def product_resolve():
+    try:
+        data = request.get_json() or {}
+        url = data.get('url') or data.get('link')
+        if not url:
+            return jsonify({"error": "missing url"}), 400
+
+        meta = _parse_product_url(url)
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36",
+            "Accept-Language": "en-US,en;q=0.9",
+        }
+        try:
+            resp = requests.get(url, headers=headers, timeout=12)
+            html = resp.text if resp.status_code == 200 else ''
+        except Exception as e:
+            html = ''
+            logger.warning(f"Fetch product page failed: {e}")
+
+        title, price = _extract_title_and_price(html, merchant=meta.get('merchant_name'))
+        canonical = (f"{meta.get('merchant_id')}:{meta.get('product_id')}" if meta.get('merchant_id') and meta.get('product_id') else url)
+
+        # Persist snapshot if we have a price and a canonical identifier
+        try:
+            if price is not None and canonical:
+                conn = _db_connect()
+                cur = conn.cursor()
+                cur.execute(
+                    "INSERT INTO price_history (canonical_id, price_cents, title, fetched_at) VALUES (?, ?, ?, ?)",
+                    (canonical, int(round(price * 100)), title, datetime.utcnow().isoformat())
+                )
+                conn.commit()
+                try:
+                    conn.close()
+                except Exception:
+                    pass
+        except Exception as e:
+            logger.warning(f"price_history insert failed: {e}")
+
+        return jsonify({
+            "ok": True,
+            "merchant_name": meta.get('merchant_name'),
+            "merchant_id": meta.get('merchant_id'),
+            "product_id": meta.get('product_id'),
+            "title": title,
+            "price_usd": price,
+            "canonical": canonical
+        })
+    except Exception as e:
+        logger.error(f"Product resolve error: {e}")
+        return jsonify({"error": str(e)}), 500
+
+@app.route('/price-history/list', methods=['GET'])
+def price_history_list():
+    try:
+        canonical_id = request.args.get('canonical_id')
+        since_days = int(request.args.get('since_days', '365'))
+        if not canonical_id:
+            return jsonify({"error": "missing canonical_id"}), 400
+        since_dt = datetime.utcnow() - timedelta(days=max(1, since_days))
+        conn = _db_connect()
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT fetched_at, price_cents, title FROM price_history WHERE canonical_id = ? AND fetched_at >= ? ORDER BY fetched_at ASC",
+            (canonical_id, since_dt.isoformat())
+        )
+        rows = cur.fetchall()
+        try:
+            conn.close()
+        except Exception:
+            pass
+        points = [
+            {
+                "ts": r[0],
+                "price_usd": (r[1] / 100.0) if isinstance(r[1], (int, float)) else None,
+                "title": r[2],
+            } for r in rows
+        ]
+        return jsonify({"ok": True, "count": len(points), "points": points})
+    except Exception as e:
+        logger.error(f"price history list error: {e}")
+        return jsonify({"error": str(e)}), 500
+
+def _build_url_from_canonical(canonical: str) -> str | None:
+    try:
+        parts = str(canonical).split(':', 1)
+        if len(parts) != 2:
+            return None
+        mid = int(parts[0])
+        pid = parts[1]
+        if mid == 44:
+            return f"https://www.amazon.com/dp/{pid}"
+        if mid == 12:
+            return f"https://www.target.com/p/-/A-{pid}"
+        if mid == 45:
+            return f"https://www.walmart.com/ip/{pid}"
+        return None
+    except Exception:
+        return None
+
+@app.route('/price-history/backfill_wayback', methods=['POST'])
+def price_history_backfill_wayback():
+    """Backfill historical prices via Wayback Machine snapshots.
+    Body: { canonical_id? or url?, months=6, points=10 }
+    """
+    try:
+        body = request.get_json() or {}
+        canonical = body.get('canonical_id')
+        url = body.get('url')
+        months = int(body.get('months', 6))
+        points = int(body.get('points', 10))
+        points = max(1, min(points, 24))
+
+        if not url and canonical:
+            url = _build_url_from_canonical(canonical)
+        if not url:
+            return jsonify({"error": "missing url or canonical_id"}), 400
+
+        meta = _parse_product_url(url)
+        merchant = meta.get('merchant_name') or ''
+        canonical_id = canonical or (f"{meta.get('merchant_id')}:{meta.get('product_id')}" if meta.get('merchant_id') and meta.get('product_id') else url)
+
+        # Time window
+        end_dt = datetime.utcnow()
+        start_dt = end_dt - timedelta(days=int(months * 30.5))
+        start = start_dt.strftime('%Y%m%d')
+        end = end_dt.strftime('%Y%m%d')
+
+        # Query Wayback CDX API
+        import urllib.parse as up
+        cdx_url = (
+            f"https://web.archive.org/cdx/search/cdx?url={up.quote(url)}&from={start}&to={end}&output=json&filter=statuscode:200&collapse=digest"
+        )
+        try:
+            resp = requests.get(cdx_url, timeout=15)
+            rows = resp.json() if resp.status_code == 200 else []
+        except Exception as e:
+            return jsonify({"error": f"wayback_cdx_failed: {e}"}), 502
+        if not rows or len(rows) <= 1:
+            return jsonify({"ok": False, "snapshots": 0, "reason": "no snapshots"}), 200
+        entries = rows[1:]
+        # Sample evenly across available snapshots
+        step = max(1, len(entries) // points)
+        sampled = [entries[i] for i in range(0, len(entries), step)][:points]
+
+        inserted = 0
+        conn = _db_connect()
+        cur = conn.cursor()
+        for r in sampled:
+            try:
+                ts = r[1]
+                orig = r[2]
+                arch_url = f"https://web.archive.org/web/{ts}id_/{orig}"
+                page = requests.get(arch_url, timeout=20)
+                if page.status_code != 200:
+                    continue
+                title, price = _extract_title_and_price(page.text, merchant=merchant)
+                if price is None:
+                    continue
+                # Convert ts (YYYYMMDDhhmmss) to ISO
+                dt = datetime.strptime(ts, '%Y%m%d%H%M%S')
+                cur.execute(
+                    "INSERT INTO price_history (canonical_id, price_cents, title, fetched_at) VALUES (?, ?, ?, ?)",
+                    (canonical_id, int(round(price * 100)), title, dt.isoformat())
+                )
+                inserted += 1
+            except Exception as _:
+                continue
+        conn.commit()
+        try:
+            conn.close()
+        except Exception:
+            pass
+        return jsonify({"ok": True, "inserted": inserted, "snapshots": len(sampled)})
+    except Exception as e:
+        logger.error(f"price history backfill error: {e}")
+        return jsonify({"error": str(e)}), 500
+
+@app.route('/price-history/llm_series', methods=['POST'])
+def price_history_llm_series():
+    """Generate a price series using the configured LLM (Cerebras/OpenAI-compatible).
+    Body: { canonical_id? or url?, timeframe: one of ["1D","5D","1M","6M","1Y"], points? }
+    Returns: { ok, points: [{ts, price_usd}], llm_generated: true }
+    Note: This produces LLM-estimated series, not guaranteed to be factual.
+    """
+    try:
+        body = request.get_json() or {}
+        canonical = body.get('canonical_id')
+        url = body.get('url')
+        timeframe = str(body.get('timeframe') or '6M').upper()
+        points = int(body.get('points') or 50)
+        points = max(10, min(points, 200))
+
+        if not url and canonical:
+            url = _build_url_from_canonical(canonical)
+        if not url:
+            return jsonify({"error": "missing url or canonical_id"}), 400
+
+        # Try to fetch current price/title for grounding
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36",
+            "Accept-Language": "en-US,en;q=0.9",
+        }
+        current_title = None
+        current_price = None
+        try:
+            resp = requests.get(url, headers=headers, timeout=12)
+            html = resp.text if resp.status_code == 200 else ''
+            meta = _parse_product_url(url)
+            current_title, current_price = _extract_title_and_price(html, merchant=meta.get('merchant_name'))
+        except Exception:
+            pass
+
+        # Ask the LLM to produce a JSON array of {ts, price_usd}
+        try:
+            llm = get_llm()
+        except Exception as e:
+            return jsonify({"error": f"llm_unavailable: {e}"}), 503
+
+        now_iso = datetime.utcnow().replace(microsecond=0).isoformat() + 'Z'
+        system_prompt = (
+            "You produce realistic price time series for retail products in JSON only."
+            " Output strictly a JSON array of objects with keys 'ts' (ISO8601 UTC) and 'price_usd' (number)."
+        )
+        human_prompt = (
+            f"Product URL: {url}\n"
+            f"Timeframe: {timeframe}\n"
+            f"Points: {points}\n"
+            f"Current time (UTC): {now_iso}\n"
+            f"Known title (optional): {current_title or ''}\n"
+            f"Known current price USD (optional): {current_price if current_price is not None else ''}\n\n"
+            "Rules:\n"
+            "- Distribute timestamps evenly across the timeframe ending now.\n"
+            "- Keep price within plausible retail range and near the known current price when provided.\n"
+            "- Return ONLY JSON, no prose."
+        )
+        messages = [SystemMessage(content=system_prompt), HumanMessage(content=human_prompt)]
+        resp = llm.invoke(messages)
+        raw = resp.content if hasattr(resp, 'content') else str(resp)
+        try:
+            data = json.loads(raw)
+            series = [
+                {"ts": str(p.get('ts')), "price_usd": float(p.get('price_usd'))}
+                for p in data if isinstance(p, dict) and p.get('ts') and p.get('price_usd') is not None
+            ]
+        except Exception:
+            # fallback: empty
+            series = []
+        return jsonify({"ok": True, "points": series, "llm_generated": True})
+    except Exception as e:
+        logger.error(f"price history llm series error: {e}")
+        return jsonify({"error": str(e)}), 500
+
+@app.route('/price-history/seed_demo', methods=['POST'])
+def price_history_seed_demo():
+    try:
+        body = request.get_json() or {}
+        days = int(body.get('days', 365))
+        num_points = int(body.get('points', 36))
+        jitter_pct = float(body.get('jitter_pct', 0.2))  # +/- 20%
+        external_user_id = body.get('external_user_id')
+
+        conn = _db_connect()
+        cur = conn.cursor()
+        if external_user_id:
+            cur.execute("SELECT id, canonical_id, note FROM price_watch WHERE external_user_id = ?", (external_user_id,))
+        else:
+            cur.execute("SELECT id, canonical_id, note FROM price_watch")
+        rows = cur.fetchall()
+        watches = [(r[0], r[1], r[2]) for r in rows if r[1]]
+
+        if not watches:
+            try:
+                conn.close()
+            except Exception:
+                pass
+            return jsonify({"ok": True, "seeded": 0, "reason": "no watches"})
+
+        now = datetime.utcnow()
+        seeded = 0
+        for _, canonical, note in watches:
+            base = random.uniform(20.0, 400.0)
+            for i in range(num_points):
+                # Spread points across the window, add sine wave + random jitter
+                t = i / max(1, num_points - 1)
+                price = base * (1.0 + 0.1 * (random.random() - 0.5) + 0.15 * (2.0 * (t - 0.5)))
+                price *= (1.0 + jitter_pct * (random.random() - 0.5))
+                ts = (now - timedelta(days=int(days * (1.0 - t)))).isoformat()
+                cur.execute(
+                    "INSERT INTO price_history (canonical_id, price_cents, title, fetched_at) VALUES (?, ?, ?, ?)",
+                    (canonical, int(round(max(1.0, price) * 100)), note, ts)
+                )
+                seeded += 1
+        conn.commit()
+        try:
+            conn.close()
+        except Exception:
+            pass
+        return jsonify({"ok": True, "seeded": seeded})
+    except Exception as e:
+        logger.error(f"price history seed demo error: {e}")
+        return jsonify({"error": str(e)}), 500
+
 @app.route('/optimize/payment', methods=['POST'])
 def optimize_payment():
     """Stub rewards optimizer.
@@ -829,6 +1259,20 @@ def init_db():
             );
             """
         )
+        # price history snapshots
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS price_history (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                canonical_id TEXT NOT NULL,
+                price_cents INTEGER NOT NULL,
+                title TEXT,
+                fetched_at TEXT NOT NULL
+            );
+            """
+        )
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_price_history_canonical ON price_history(canonical_id)")
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_price_history_time ON price_history(fetched_at)")
         conn.commit()
     finally:
         try:
