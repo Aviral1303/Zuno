@@ -43,25 +43,25 @@ export default function HeroSection() {
           transition={{ duration: 0.8, delay: 0.3 }}
           className="flex flex-col sm:flex-row gap-4 justify-center items-center mb-16"
         >
-          <Link to={createPageUrl("Dashboard")}>
+          <Link to="/signup">
             <Button 
               size="lg" 
-              className="bg-white text-gray-900 hover:bg-gray-100 px-8 py-4 rounded-full text-lg font-medium transition-all duration-300 shadow-2xl"
+              className="bg-gradient-to-r from-indigo-600 to-purple-600 text-white hover:from-indigo-700 hover:to-purple-700 px-8 py-4 rounded-full text-lg font-medium transition-all duration-300 shadow-2xl"
             >
-              Get started
+              Sign Up
               <ArrowRight className="ml-2 w-5 h-5" />
             </Button>
           </Link>
           
-          <Button 
-            variant="ghost"
-            size="lg"
-            onClick={() => setIsPlaying(!isPlaying)}
-            className="text-white hover:bg-white/10 px-8 py-4 rounded-full text-lg font-medium border border-white/20"
-          >
-            <Play className="mr-2 w-5 h-5" />
-            See how it works
-          </Button>
+          <Link to="/signin">
+            <Button 
+              variant="ghost"
+              size="lg"
+              className="text-white hover:bg-white/10 px-8 py-4 rounded-full text-lg font-medium border border-white/20"
+            >
+              Sign In
+            </Button>
+          </Link>
         </motion.div>
 
         {/* Minimalist feature highlights */}
