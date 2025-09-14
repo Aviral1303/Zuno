@@ -56,8 +56,8 @@ const aiAgents = [
     features: ["Spending analysis", "Budget optimization", "Savings goals"]
   },
   {
-    name: "Subscription Manager",
-    description: "Automatically manage all your recurring payments and subscriptions",
+    name: "Budget Analyzer",
+    description: "Smart spending insights and recommendations to optimize your shopping budget",
     icon: Calendar,
     color: "from-violet-500 to-purple-600",
     url: "Subscriptions",

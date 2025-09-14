@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useMemo, useState } from "react";
 import { motion } from "framer-motion";
 import { CreditCard } from "lucide-react";
 import { Switch } from "@/components/ui/switch";
@@ -30,9 +30,6 @@ function PieChart({ data = [], size = 200 }) {
 }
 
 export default function BudgetAdvisor() {
-  const baseUrl = import.meta.env.VITE_API_BASE_URL || 'http://localhost:5001';
-  const [amazonTxns, setAmazonTxns] = useState([]);
-  const [loadingAmazon, setLoadingAmazon] = useState(false);
   const [annual, setAnnual] = useState(false);
 
   // Dummy monthly spend estimates for an average U.S. household (illustrative only)
@@ -45,37 +42,8 @@ export default function BudgetAdvisor() {
     ubereats: 95,
   }), []);
 
-  const fetchAmazonTransactions = async () => {
-    setLoadingAmazon(true);
-    try {
-      const params = new URLSearchParams({
-        external_user_id: 'zuno_user_123',
-        merchant_id: '44',
-        limit: '50',
-        mock: '1',
-      });
-      const res = await fetch(`${baseUrl}/knot/amazon/transactions?${params.toString()}`);
-      const data = await res.json();
-      const txns = data?.data?.transactions || data?.data?.data?.transactions || [];
-      setAmazonTxns(txns);
-    } catch (e) {
-      setAmazonTxns([]);
-    } finally {
-      setLoadingAmazon(false);
-    }
-  };
-
-  useEffect(() => {
-    // Load Amazon by default
-    fetchAmazonTransactions();
-  }, []);
-
-  const amazonTotal = useMemo(() => {
-    return amazonTxns.reduce((sum, t) => {
-      const s = parseFloat((t?.price?.total ?? '0').replace(/[^0-9.]/g, ''));
-      return sum + (isNaN(s) ? 0 : s);
-    }, 0);
-  }, [amazonTxns]);
+  // Use a constant baseline estimate for Amazon in this view
+  const amazonTotal = 420;
 
   const merchants = useMemo(() => ([
     { key: 'amazon', name: 'Amazon', value: Math.max(amazonTotal, 420), color: '#6366f1' },
@@ -125,8 +93,8 @@ export default function BudgetAdvisor() {
               <CreditCard className="w-8 h-8 text-white" />
             </div>
             <div>
-              <h1 className="text-3xl font-light text-gray-900">Budget Advisor</h1>
-              <p className="text-gray-600">Smart spending insights and budget optimization</p>
+              <h1 className="text-3xl font-light text-gray-900">Spending Tracker</h1>
+              <p className="text-gray-600">Smart analysis of your spending</p>
             </div>
           </div>
           <div className="flex items-center gap-4">
@@ -172,30 +140,37 @@ export default function BudgetAdvisor() {
           </div>
         </div>
 
-        {/* Amazon transaction sample */}
+        {/* Recent transactions */}
         <div className="bg-white rounded-3xl p-6 border border-gray-100">
           <div className="flex items-center justify-between mb-3">
-            <h3 className="text-sm font-medium text-gray-900">Amazon transactions (mock or live)</h3>
-            <div className="text-xs text-gray-500">Loaded: {amazonTxns.length}</div>
+            <h3 className="text-sm font-medium text-gray-900">Recent transactions</h3>
+            <div className="text-xs text-gray-500">Last 10</div>
           </div>
-          {amazonTxns.length ? (
-            <div className="grid gap-3">
-              {amazonTxns.slice(0, 10).map((t, i) => (
-                <div key={i} className="flex items-center justify-between p-3 rounded-xl border border-gray-100 bg-gray-50">
-                  <div className="truncate">
-                    <div className="text-sm font-medium text-gray-900 truncate">{t.products?.[0]?.name || t.description || 'Amazon Purchase'}</div>
-                    <div className="text-xs text-gray-500">{t.datetime ? new Date(t.datetime).toLocaleString() : ''}</div>
-                  </div>
-                  <div className="text-sm font-semibold text-gray-900">{t.price?.total ? `$${parseFloat(t.price.total).toFixed(2)}` : '—'}</div>
+          <div className="grid gap-3">
+            {[
+              { m: 'Target', what: 'Groceries & essentials', amt: 86.42, at: Date.now() - 1000*60*60*3 },
+              { m: 'Walmart', what: 'Household supplies', amt: 42.15, at: Date.now() - 1000*60*60*7 },
+              { m: 'Costco', what: 'Bulk groceries', amt: 128.90, at: Date.now() - 1000*60*60*24 },
+              { m: 'DoorDash', what: 'Dinner order', amt: 28.40, at: Date.now() - 1000*60*60*30 },
+              { m: 'Instacart', what: 'Weekly groceries', amt: 76.12, at: Date.now() - 1000*60*60*36 },
+              { m: 'UberEats', what: 'Lunch', amt: 18.75, at: Date.now() - 1000*60*60*42 },
+              { m: 'Amazon', what: 'Electronics accessory', amt: 19.99, at: Date.now() - 1000*60*60*50 },
+              { m: 'Target', what: 'Home decor', amt: 34.55, at: Date.now() - 1000*60*60*60 },
+              { m: 'Walmart', what: 'Pet supplies', amt: 24.30, at: Date.now() - 1000*60*60*70 },
+              { m: 'Costco', what: 'Gas & groceries', amt: 92.66, at: Date.now() - 1000*60*60*80 },
+            ].map((t, i) => (
+              <div key={i} className="flex items-center justify-between p-3 rounded-xl border border-gray-100 bg-gray-50">
+                <div className="truncate">
+                  <div className="text-sm font-medium text-gray-900 truncate">{t.m}</div>
+                  <div className="text-xs text-gray-500 truncate">{t.what}</div>
                 </div>
-              ))}
-              {amazonTxns.length > 10 && (
-                <div className="text-xs text-gray-500">Showing {Math.min(10, amazonTxns.length)} of {amazonTxns.length}</div>
-              )}
-            </div>
-          ) : (
-            <div className="text-sm text-gray-500">No transactions yet.</div>
-          )}
+                <div className="text-right">
+                  <div className="text-sm font-semibold text-gray-900">${t.amt.toFixed(2)}</div>
+                  <div className="text-xs text-gray-500">{new Date(t.at).toLocaleString()}</div>
+                </div>
+              </div>
+            ))}
+          </div>
         </div>
       </div>
     </div>

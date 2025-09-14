@@ -447,7 +447,6 @@ def knot_get(path: str, timeout: int = 30):
     except Exception:
         data = {"text": resp.text}
     return resp.status_code, resp.ok, data
-
 def _mock_amazon_transactions(limit: int = 10) -> list[dict]:
     now = datetime.utcnow()
     base = [

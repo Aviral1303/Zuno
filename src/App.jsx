@@ -82,13 +82,13 @@ const aiAgents = [
     description: "Smart gift recommendations"
   },
   {
-    title: "Budget Advisor",
+    title: "Spending Tracker",
     url: createPageUrl("BudgetAdvisor"),
     icon: CreditCard,
     description: "Spending insights"
   },
   {
-    title: "Subscription Manager",
+    title: "Budget Analyzer",
     url: createPageUrl("Subscriptions"),
     icon: Calendar,
     description: "Manage recurring payments"
