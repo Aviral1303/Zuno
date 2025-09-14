@@ -1,14 +1,15 @@
 // Wait for KnotapiJS to be available
 function initializeKnot() {
+    console.log("Initializing KnotapiJS");
     if (window.KnotapiJS && window.KnotapiJS.default) {
         console.log("✅ KnotapiJS loaded successfully");
         
         const KnotapiJS = window.KnotapiJS.default;
         const knotapi = new KnotapiJS();
-
+        console.log("KnotapiJS instance created");
         // Invoke the open method with parameters
         knotapi.open({
-            sessionId: "604a4fb3-f523-4b65-b3e0-530a8cc0a60f",
+            sessionId: "915efe72-5136-4652-z91q-d9d48003c102",
             clientId: "dda0778d-9486-47f8-bd80-6f2512f9bcdb",
             environment: "development",  // or "production"
             product: "transaction_link",  // or "transaction_link"

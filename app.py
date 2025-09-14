@@ -49,9 +49,10 @@ SCHED_ENABLED = str(os.getenv("SCHED_ENABLED", "1")).lower() in ("1", "true", "y
 SCHED_INTERVAL_MIN = int(os.getenv("SCHED_INTERVAL_MIN", "30"))
 APP_ENV = os.getenv("APP_ENV", "development")
 
-# Knot API Configuration (no hardcoded secrets)
-KNOT_CLIENT_ID = os.getenv('KNOT_CLIENT_ID')
-KNOT_CLIENT_SECRET = os.getenv('KNOT_CLIENT_SECRET')
+# Knot API Configuration
+# Use ENV if present, otherwise fall back to provided credentials (per request; do not modify .env)
+KNOT_CLIENT_ID = os.getenv('KNOT_CLIENT_ID') or 'dda0778d-9486-47f8-bd80-6f2512f9bcdb'
+KNOT_CLIENT_SECRET = os.getenv('KNOT_CLIENT_SECRET') or '884d84e855054c32a8e39d08fcd9845d'
 KNOT_BASE_URL = os.getenv('KNOT_BASE_URL', 'https://development.knotapi.com')
 KNOT_API_KEY = os.getenv('KNOT_API_KEY')
 KNOT_ENABLED = bool(KNOT_CLIENT_ID and KNOT_CLIENT_SECRET)

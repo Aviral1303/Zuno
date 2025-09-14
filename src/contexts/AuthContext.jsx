@@ -57,28 +57,29 @@ export const AuthProvider = ({ children }) => {
   }, [])
 
   const fetchProfile = async (userId) => {
-    try {
-      console.log('Fetching profile for user:', userId)
-      const { data, error } = await supabase
-        .from('profiles')
-        .select('*')
-        .eq('id', userId)
-        .single()
+    console.log('Fetching profile for user:', userId);
+    // try {
+    //   console.log('Fetching profile for user:', userId)
+    //   const { data, error } = await supabase
+    //     .from('profiles')
+    //     .select('*')
+    //     .eq('id', userId)
+    //     .single()
 
-      console.log('Profile fetch result:', { data, error })
+    //   console.log('Profile fetch result:', { data, error })
 
-      if (error && error.code !== 'PGRST116') {
-        console.error('Profile fetch error:', error)
-        // Don't throw error, just log it - missing profile shouldn't break auth
-        return
-      }
+    //   if (error && error.code !== 'PGRST116') {
+    //     console.error('Profile fetch error:', error)
+    //     // Don't throw error, just log it - missing profile shouldn't break auth
+    //     return
+    //   }
 
-      setProfile(data)
-      try { localStorage.setItem('zuno_profile', JSON.stringify(data)) } catch {}
-    } catch (error) {
-      console.error('Error fetching profile:', error)
-      // Don't let profile errors break authentication
-    }
+    //   setProfile(data)
+    //   try { localStorage.setItem('zuno_profile', JSON.stringify(data)) } catch {}
+    // } catch (error) {
+    //   console.error('Error fetching profile:', error)
+    //   // Don't let profile errors break authentication
+    // }
   }
 
   const signUp = async (email, password, fullName) => {

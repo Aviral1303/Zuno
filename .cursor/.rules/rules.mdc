@@ -10,5 +10,5 @@ The code should be modularised in such a way that it is easy to read and underst
 
 I want you to stick to the goal of building a shopping conceiarge. 
 
-
+I dont want you to touch anything in the .env file. You can add credentials but not delete anything.
 

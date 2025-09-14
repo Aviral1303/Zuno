@@ -51,7 +51,7 @@ export default function GiftPlanner() {
         external_user_id: 'zuno_user_123',
         merchant_id: '44',
         limit: '50',
-        mock: '1'
+        mock: '0'
       });
       if (sessionId) params.set('session_id', sessionId);
       const res = await fetch(`${baseUrl}/knot/amazon/transactions?${params.toString()}`, {
@@ -74,6 +74,7 @@ export default function GiftPlanner() {
   };
 
   const syncDummy = (key) => {
+    console.log("Syncing dummy transactions for", key);
     const list = generateDummyTransactions(key);
     setTransactionsByMerchant(prev => ({ ...prev, [key]: list }));
   };
@@ -106,50 +107,69 @@ export default function GiftPlanner() {
     bootstrap();
   }, [knotClient]);
 
+  const ensureKnotClient = async () => {
+    if (knotClient) return knotClient;
+    console.log("Loading Knot Web SDK");
+    const loadSdk = () => new Promise((resolve, reject) => {
+      if (window.KnotapiJS) return resolve();
+      const script = document.createElement('script');
+      script.src = 'https://unpkg.com/knotapi-js@next';
+      script.onload = () => resolve();
+      script.onerror = () => reject(new Error('Failed to load Knot Web SDK'));
+      document.head.appendChild(script);
+      console.log('Knot Web SDK loaded');
+    });
+    await loadSdk();
+    const KnotapiJS = window.KnotapiJS && window.KnotapiJS.default;
+    if (!KnotapiJS) throw new Error('Knot SDK not available');
+    const client = new KnotapiJS();
+    setKnotClient(client);
+    return client;
+  };
+
   const openKnot = async () => {
     try {
-      // Create session via backend
-      const res = await fetch(`${baseUrl}/knot/session/create`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ type: 'transaction_link', external_user_id: 'zuno_user_123' })
-      });
-      const data = await res.json();
-      if (!data.success) throw new Error(data.error || 'Failed to create session');
+      console.log("Opening Knot");
+      setLoading(true);
+      console.log("Window", window);
+      // Use provided session id only; do not create session or fetch transactions
+      const search = typeof window !== 'undefined' ? window.location.search : '';
+      console.log("Search", search);
+      const qs = new URLSearchParams(search);
+      console.log("QS", qs);
+      const providedSid = "320017dc-2c98-4528-923a-57f31f3e6a34";
+      console.log("Provided Session ID", providedSid);
+      if (!providedSid) {
+        throw new Error('Missing session id. Provide ?session_id=... in URL or set it in state.');
+      }
+      setSessionId(providedSid);
+      console.log("Session ID", providedSid);
+      const client = await ensureKnotClient();
 
-      const session = data.session;
-      const sid = session.id || session.session_id || session.session?.id;
-      const cid = data.client_id;
-      setSessionId(sid);
-
-      if (!window.KnotapiJS) throw new Error('Knot SDK not loaded');
-      const KnotapiJS = window.KnotapiJS.default;
-      const client = knotClient || new KnotapiJS();
+      const cid = 'dda0778d-9486-47f8-bd80-6f2512f9bcdb';
 
       client.open({
-        sessionId: sid,
+        sessionId: "320017dc-2c98-4528-923a-57f31f3e6a34",
         clientId: cid,
         environment: 'development',
         product: 'transaction_link',
         merchantIds: [44], // Amazon
         entryPoint: 'knot_sync',
-        onSuccess: (product, details) => {
+        onSuccess: () => {
           setAmazonConnected(true);
-          // Immediately try to sync
-          syncAmazon().catch(() => {});
         },
-        onError: (product, errorCode, message) => {
+        onError: (_product, _errorCode, message) => {
           setError(message || 'Knot error');
         },
-        onEvent: (product, event) => {
+        onEvent: (_product, event) => {
           if (event === 'AUTHENTICATED') setAmazonConnected(true);
         },
         onExit: () => {}
       });
-
-      if (!knotClient) setKnotClient(client);
     } catch (err) {
       setError(err.message || 'Failed to open Knot');
+    } finally {
+      setLoading(false);
     }
   };
   return (
@@ -184,8 +204,8 @@ export default function GiftPlanner() {
           {/* Actions */}
           <div className="mb-6">
             {activeTab === 'amazon' ? (
-              <Button onClick={syncAmazon} disabled={loading} className="rounded-2xl">
-                <RefreshCw className={`w-4 h-4 mr-2 ${loading ? 'animate-spin' : ''}`} /> Get Amazon Transactions
+              <Button onClick={openKnot} disabled={loading} className="rounded-2xl">
+                <RefreshCw className={`w-4 h-4 mr-2 ${loading ? 'animate-spin' : ''}`} /> Get Amazon Transactions (Knot)
               </Button>
             ) : (
               <Button onClick={() => syncDummy(activeTab)} disabled={loading} className="rounded-2xl">
