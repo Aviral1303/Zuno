@@ -16,6 +16,13 @@ import MinimalDealsSection from "../components/dashboard/MinimalDealsSection";
 
 export default function Dashboard() {
   const [currentTime, setCurrentTime] = useState(new Date());
+  const [merchants, setMerchants] = useState([]);
+  const [syncResult, setSyncResult] = useState(null);
+  const [optResult, setOptResult] = useState(null);
+  const [auditResult, setAuditResult] = useState(null);
+  const [watchAddResult, setWatchAddResult] = useState(null);
+  const [watchList, setWatchList] = useState([]);
+  const [matches, setMatches] = useState([]);
 
   useEffect(() => {
     const timer = setInterval(() => {
@@ -30,6 +37,94 @@ export default function Dashboard() {
     if (hour < 12) return "Good morning";
     if (hour < 18) return "Good afternoon";
     return "Good evening";
+  };
+
+  const baseUrl = import.meta.env.VITE_API_BASE_URL || 'http://localhost:5001';
+
+  const loadMerchants = async () => {
+    try {
+      const res = await fetch(`${baseUrl}/knot/merchants`);
+      const data = await res.json();
+      setMerchants(data.merchants || []);
+    } catch (e) {
+      console.error('loadMerchants failed', e);
+    }
+  };
+
+  const runSync = async (merchantId = 44) => {
+    try {
+      const res = await fetch(`${baseUrl}/knot/transactions/sync`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ merchant_id: merchantId, external_user_id: 'abc', limit: 5 })
+      });
+      const data = await res.json();
+      setSyncResult(data);
+    } catch (e) {
+      console.error('runSync failed', e);
+    }
+  };
+
+  const runOptimize = async (merchantId = 44) => {
+    try {
+      const res = await fetch(`${baseUrl}/optimize/payment`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ merchant_id: merchantId, amount_cents: 5000 })
+      });
+      const data = await res.json();
+      setOptResult(data);
+    } catch (e) {
+      console.error('runOptimize failed', e);
+    }
+  };
+
+  const runAudit = async () => {
+    try {
+      const res = await fetch(`${baseUrl}/subscriptions/audit`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ external_user_id: 'abc', merchants: [44,12,45], limit: 10, lookback_days: 365 })
+      });
+      const data = await res.json();
+      setAuditResult(data);
+    } catch (e) {
+      console.error('runAudit failed', e);
+    }
+  };
+
+  const addPriceWatch = async () => {
+    try {
+      const res = await fetch(`${baseUrl}/price-protection/watch`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ order_id: 'demo-order', canonical_id: 'asin:XYZ', target_price_cents: 30000, window_days: 30 })
+      });
+      const data = await res.json();
+      setWatchAddResult(data);
+    } catch (e) {
+      console.error('addPriceWatch failed', e);
+    }
+  };
+
+  const listPriceWatches = async () => {
+    try {
+      const res = await fetch(`${baseUrl}/price-protection/list`);
+      const data = await res.json();
+      setWatchList(data.watches || []);
+    } catch (e) {
+      console.error('listPriceWatches failed', e);
+    }
+  };
+
+  const listMatches = async () => {
+    try {
+      const res = await fetch(`${baseUrl}/price-protection/matches?external_user_id=abc`);
+      const data = await res.json();
+      setMatches(data.matches || []);
+    } catch (e) {
+      console.error('listMatches failed', e);
+    }
   };
 
   return (
@@ -115,6 +210,58 @@ export default function Dashboard() {
                     <p className="font-semibold text-blue-600">Save $180</p>
                     <p className="text-xs text-gray-500">on average</p>
                   </div>
+                </div>
+              </div>
+            </motion.div>
+
+            {/* Knot & Optimizers */}
+            <motion.div
+              initial={{ opacity: 0, y: 20 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ duration: 0.6, delay: 0.35 }}
+              className="mt-8 bg-white rounded-3xl p-8 shadow-sm border border-gray-100"
+            >
+              <h3 className="text-xl font-light text-gray-900 mb-4">Knot & Optimizers</h3>
+              <div className="flex flex-wrap gap-3 mb-4">
+                <Button variant="outline" onClick={loadMerchants}>Load merchants</Button>
+                <Button variant="outline" onClick={() => runSync(44)}>Sync Amazon</Button>
+                <Button variant="outline" onClick={() => runSync(12)}>Sync Target</Button>
+                <Button variant="outline" onClick={() => runOptimize(44)}>Optimize (Amazon)</Button>
+                <Button variant="outline" onClick={runAudit}>Audit subscriptions</Button>
+                <Button variant="outline" onClick={addPriceWatch}>Add price watch</Button>
+                <Button variant="outline" onClick={listPriceWatches}>List watches</Button>
+              </div>
+              <div className="grid md:grid-cols-2 gap-6">
+                <div>
+                  <p className="text-sm font-medium text-gray-700 mb-2">Merchants</p>
+                  <pre className="text-xs bg-gray-50 p-3 rounded-2xl overflow-auto max-h-64">{JSON.stringify(merchants, null, 2)}</pre>
+                </div>
+                <div>
+                  <p className="text-sm font-medium text-gray-700 mb-2">Sync result</p>
+                  <pre className="text-xs bg-gray-50 p-3 rounded-2xl overflow-auto max-h-64">{JSON.stringify(syncResult, null, 2)}</pre>
+                </div>
+                <div>
+                  <p className="text-sm font-medium text-gray-700 mb-2">Optimize result</p>
+                  <pre className="text-xs bg-gray-50 p-3 rounded-2xl overflow-auto max-h-64">{JSON.stringify(optResult, null, 2)}</pre>
+                </div>
+                <div>
+                  <p className="text-sm font-medium text-gray-700 mb-2">Subscriptions audit</p>
+                  <pre className="text-xs bg-gray-50 p-3 rounded-2xl overflow-auto max-h-64">{JSON.stringify(auditResult, null, 2)}</pre>
+                </div>
+                <div>
+                  <p className="text-sm font-medium text-gray-700 mb-2">Watch add</p>
+                  <pre className="text-xs bg-gray-50 p-3 rounded-2xl overflow-auto max-h-64">{JSON.stringify(watchAddResult, null, 2)}</pre>
+                </div>
+                <div>
+                  <p className="text-sm font-medium text-gray-700 mb-2">Watches</p>
+                  <pre className="text-xs bg-gray-50 p-3 rounded-2xl overflow-auto max-h-64">{JSON.stringify(watchList, null, 2)}</pre>
+                </div>
+                <div>
+                  <div className="flex items-center justify-between mb-2">
+                    <p className="text-sm font-medium text-gray-700">Matches</p>
+                    <Button variant="outline" size="sm" onClick={listMatches}>Refresh</Button>
+                  </div>
+                  <pre className="text-xs bg-gray-50 p-3 rounded-2xl overflow-auto max-h-64">{JSON.stringify(matches, null, 2)}</pre>
                 </div>
               </div>
             </motion.div>

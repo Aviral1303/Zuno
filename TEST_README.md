@@ -92,3 +92,5 @@ The script supports common audio formats:
 - WAV, MP3, M4A, FLAC
 - Any format supported by librosa
 - Automatically resamples to 16kHz for optimal Whisper performance
+
+
