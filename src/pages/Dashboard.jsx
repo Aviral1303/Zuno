@@ -8,13 +8,26 @@ import {
   Settings,
   Bell,
   Search,
-  Filter
+  Filter,
+  RefreshCw,
+  TrendingUp,
+  DollarSign,
+  CreditCard,
+  Target
 } from "lucide-react";
 
 import ModernStatsGrid from "../components/dashboard/ModernStatsGrid";
 import MinimalDealsSection from "../components/dashboard/MinimalDealsSection";
+import Spendometer from "../components/dashboard/Spendometer";
+import TransactionVisualization from "../components/dashboard/TransactionVisualization";
+import PriceTrackingWidget from "../components/dashboard/PriceTrackingWidget";
+import SubscriptionAuditWidget from "../components/dashboard/SubscriptionAuditWidget";
+import DealRecommendationsWidget from "../components/dashboard/DealRecommendationsWidget";
+import { summarizeTransactions, loadBudgetSnapshot } from "@/lib/analytics";
+import { useAuth } from "@/contexts/AuthContext";
 
 export default function Dashboard() {
+  const { user, profile } = useAuth?.() || {};
   const [currentTime, setCurrentTime] = useState(new Date());
   const [merchants, setMerchants] = useState([]);
   const [syncResult, setSyncResult] = useState(null);
@@ -23,6 +36,19 @@ export default function Dashboard() {
   const [watchAddResult, setWatchAddResult] = useState(null);
   const [watchList, setWatchList] = useState([]);
   const [matches, setMatches] = useState([]);
+  
+  // New state for comprehensive dashboard integration
+  const [transactions, setTransactions] = useState([]);
+  const [isLoading, setIsLoading] = useState(false);
+  const [userProfile, setUserProfile] = useState(null);
+  const [dashboardStats, setDashboardStats] = useState({
+    totalSpent: 0,
+    monthlyBudget: 2000,
+    activeWatches: 0,
+    subscriptionCandidates: 0,
+    potentialSavings: 0
+  });
+  const [spendingSummary, setSpendingSummary] = useState(null);
 
   useEffect(() => {
     const timer = setInterval(() => {
@@ -31,6 +57,29 @@ export default function Dashboard() {
 
     return () => clearInterval(timer);
   }, []);
+
+  // Load all dashboard data on component mount
+  useEffect(() => {
+    loadDashboardData();
+  }, []);
+
+  const loadDashboardData = async () => {
+    setIsLoading(true);
+    try {
+      await Promise.all([
+        loadMerchants(),
+        loadTransactions(),
+        loadPriceWatches(),
+        loadPriceMatches(),
+        runSubscriptionAudit(),
+        loadUserProfile()
+      ]);
+    } catch (error) {
+      console.error('Failed to load dashboard data:', error);
+    } finally {
+      setIsLoading(false);
+    }
+  };
 
   const getGreeting = () => {
     const hour = currentTime.getHours();
@@ -48,6 +97,50 @@ export default function Dashboard() {
       setMerchants(data.merchants || []);
     } catch (e) {
       console.error('loadMerchants failed', e);
+    }
+  };
+
+  const loadTransactions = async () => {
+    try {
+      // Use the backend's dummy Amazon transactions endpoint for consistency
+      const res = await fetch(`${baseUrl}/knot/amazon/transactions?external_user_id=zuno_user_123&limit=50&mock=1`);
+      const data = await res.json();
+      const allTransactions = (data && data.data && data.data.transactions) ? data.data.transactions : [];
+      setTransactions(allTransactions);
+
+      // Summarize spending patterns for current month
+      const summary = summarizeTransactions(allTransactions);
+      setSpendingSummary(summary);
+
+      // Prefer snapshot from Budget/Spending tracker if present
+      const snap = loadBudgetSnapshot();
+      const total = (snap && typeof snap.totalMonth === 'number') ? snap.totalMonth : summary.totalSpentMonth;
+      setDashboardStats(prev => ({
+        ...prev,
+        totalSpent: total,
+      }));
+    } catch (e) {
+      console.error('loadTransactions failed', e);
+    }
+  };
+
+  const loadUserProfile = async () => {
+    try {
+      // This would typically load from Supabase auth context
+      // For now, we'll use mock data
+      const mockProfile = {
+        monthly_budget: 2000,
+        income_amount: 5000,
+        shopping_preferences: ['electronics', 'home', 'fashion']
+      };
+      setUserProfile(mockProfile);
+      
+      setDashboardStats(prev => ({
+        ...prev,
+        monthlyBudget: mockProfile.monthly_budget
+      }));
+    } catch (e) {
+      console.error('loadUserProfile failed', e);
     }
   };
 
@@ -79,58 +172,80 @@ export default function Dashboard() {
     }
   };
 
-  const runAudit = async () => {
+  const runSubscriptionAudit = async () => {
     try {
       const res = await fetch(`${baseUrl}/subscriptions/audit`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ external_user_id: 'abc', merchants: [44,12,45], limit: 10, lookback_days: 365 })
+        body: JSON.stringify({ external_user_id: 'zuno_user_123', merchants: [44,12,45], limit: 50, lookback_days: 365 })
       });
       const data = await res.json();
       setAuditResult(data);
+      
+      // Update dashboard stats
+      setDashboardStats(prev => ({
+        ...prev,
+        subscriptionCandidates: data.candidates?.length || 0
+      }));
     } catch (e) {
-      console.error('runAudit failed', e);
+      console.error('runSubscriptionAudit failed', e);
     }
   };
 
-  const addPriceWatch = async () => {
+  const loadPriceWatches = async () => {
     try {
-      const res = await fetch(`${baseUrl}/price-protection/watch`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ order_id: 'demo-order', canonical_id: 'asin:XYZ', target_price_cents: 30000, window_days: 30 })
-      });
-      const data = await res.json();
-      setWatchAddResult(data);
-    } catch (e) {
-      console.error('addPriceWatch failed', e);
-    }
-  };
-
-  const listPriceWatches = async () => {
-    try {
-      const res = await fetch(`${baseUrl}/price-protection/list`);
+      const res = await fetch(`${baseUrl}/price-protection/list?external_user_id=zuno_user_123`);
       const data = await res.json();
       setWatchList(data.watches || []);
+      
+      // Update dashboard stats
+      setDashboardStats(prev => ({
+        ...prev,
+        activeWatches: data.watches?.length || 0
+      }));
     } catch (e) {
-      console.error('listPriceWatches failed', e);
+      console.error('loadPriceWatches failed', e);
     }
   };
 
-  const listMatches = async () => {
+  const loadPriceMatches = async () => {
     try {
-      const res = await fetch(`${baseUrl}/price-protection/matches?external_user_id=abc`);
+      const res = await fetch(`${baseUrl}/price-protection/matches?external_user_id=zuno_user_123`);
       const data = await res.json();
       setMatches(data.matches || []);
+      
+      // Calculate potential savings
+      const potentialSavings = (data.matches || []).reduce((sum, match) => {
+        const watch = watchList.find(w => w.id === match.watch_id);
+        if (watch && watch.target_price_cents && match.found_price_cents) {
+          const savings = (watch.target_price_cents - match.found_price_cents) / 100;
+          return sum + Math.max(0, savings);
+        }
+        return sum;
+      }, 0);
+      
+      setDashboardStats(prev => ({
+        ...prev,
+        potentialSavings
+      }));
     } catch (e) {
-      console.error('listMatches failed', e);
+      console.error('loadPriceMatches failed', e);
+    }
+  };
+
+  const refreshAllData = async () => {
+    setIsLoading(true);
+    try {
+      await loadDashboardData();
+    } finally {
+      setIsLoading(false);
     }
   };
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-50 to-gray-100 p-6">
       <div className="max-w-7xl mx-auto">
-        {/* Clean header */}
+        {/* Enhanced header with refresh button */}
         <motion.div
           initial={{ opacity: 0, y: 20 }}
           animate={{ opacity: 1, y: 0 }}
@@ -139,10 +254,17 @@ export default function Dashboard() {
         >
           <div className="mb-4 lg:mb-0">
             <h1 className="text-3xl font-light text-gray-900 mb-2">
-              {getGreeting()}
+              {(() => {
+                try {
+                  const name = (profile && profile.full_name) || (user && user.email && user.email.split('@')[0]) || '';
+                  return name ? `Welcome, ${name}` : 'Welcome';
+                } catch {
+                  return 'Welcome';
+                }
+              })()}
             </h1>
             <p className="text-gray-600">
-              Here's what Zuno found for you today
+              Here's your complete shopping intelligence overview
             </p>
           </div>
           
@@ -155,8 +277,14 @@ export default function Dashboard() {
                 className="pl-10 pr-4 py-2 bg-white border border-gray-200 rounded-full text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent w-64"
               />
             </div>
-            <Button variant="outline" size="icon" className="rounded-full border-gray-200">
-              <Filter className="w-4 h-4" />
+            <Button 
+              variant="outline" 
+              size="icon" 
+              className="rounded-full border-gray-200"
+              onClick={refreshAllData}
+              disabled={isLoading}
+            >
+              <RefreshCw className={`w-4 h-4 ${isLoading ? 'animate-spin' : ''}`} />
             </Button>
             <Link to={createPageUrl("Chat")}>
               <Button className="bg-indigo-600 hover:bg-indigo-700 text-white px-6 rounded-full">
@@ -167,148 +295,120 @@ export default function Dashboard() {
           </div>
         </motion.div>
 
-        {/* Stats */}
-        <ModernStatsGrid />
-
-        {/* Main content */}
-        <div className="grid lg:grid-cols-3 gap-8">
-          <div className="lg:col-span-2">
-            <motion.div
-              initial={{ opacity: 0, y: 20 }}
-              animate={{ opacity: 1, y: 0 }}
-              transition={{ duration: 0.6, delay: 0.2 }}
-            >
-              <MinimalDealsSection />
-            </motion.div>
-            
-            {/* Spending insights */}
-            <motion.div
-              initial={{ opacity: 0, y: 20 }}
-              animate={{ opacity: 1, y: 0 }}
-              transition={{ duration: 0.6, delay: 0.3 }}
-              className="mt-8 bg-white rounded-3xl p-8 shadow-sm border border-gray-100"
-            >
-              <h3 className="text-xl font-light text-gray-900 mb-6">Spending insights</h3>
-              <div className="space-y-4">
-                <div className="flex items-center justify-between p-4 bg-gray-50 rounded-2xl">
-                  <div>
-                    <p className="font-medium text-gray-900">Electronics</p>
-                    <p className="text-sm text-gray-500">Your top category this month</p>
-                  </div>
-                  <div className="text-right">
-                    <p className="font-semibold text-gray-900">$1,240</p>
-                    <p className="text-xs text-emerald-600">15% below budget</p>
-                  </div>
-                </div>
-                
-                <div className="flex items-center justify-between p-4 bg-blue-50 rounded-2xl">
-                  <div>
-                    <p className="font-medium text-gray-900">Best saving opportunity</p>
-                    <p className="text-sm text-gray-500">Weekend tech sales</p>
-                  </div>
-                  <div className="text-right">
-                    <p className="font-semibold text-blue-600">Save $180</p>
-                    <p className="text-xs text-gray-500">on average</p>
-                  </div>
-                </div>
+        {/* Enhanced Stats Grid */}
+        <motion.div
+          initial={{ opacity: 0, y: 20 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ duration: 0.6, delay: 0.1 }}
+          className="grid grid-cols-2 lg:grid-cols-4 gap-6 mb-8"
+        >
+          <div className="bg-white rounded-3xl p-6 shadow-sm border border-gray-100">
+            <div className="flex items-center gap-3 mb-3">
+              <div className="w-10 h-10 bg-gradient-to-br from-emerald-500 to-green-600 rounded-2xl flex items-center justify-center">
+                <DollarSign className="w-5 h-5 text-white" />
               </div>
-            </motion.div>
-
-            {/* Knot & Optimizers */}
-            <motion.div
-              initial={{ opacity: 0, y: 20 }}
-              animate={{ opacity: 1, y: 0 }}
-              transition={{ duration: 0.6, delay: 0.35 }}
-              className="mt-8 bg-white rounded-3xl p-8 shadow-sm border border-gray-100"
-            >
-              <h3 className="text-xl font-light text-gray-900 mb-4">Knot & Optimizers</h3>
-              <div className="flex flex-wrap gap-3 mb-4">
-                <Button variant="outline" onClick={loadMerchants}>Load merchants</Button>
-                <Button variant="outline" onClick={() => runSync(44)}>Sync Amazon</Button>
-                <Button variant="outline" onClick={() => runSync(12)}>Sync Target</Button>
-                <Button variant="outline" onClick={() => runOptimize(44)}>Optimize (Amazon)</Button>
-                <Button variant="outline" onClick={runAudit}>Audit subscriptions</Button>
-                <Button variant="outline" onClick={addPriceWatch}>Add price watch</Button>
-                <Button variant="outline" onClick={listPriceWatches}>List watches</Button>
+              <div>
+                <h3 className="text-sm font-medium text-gray-700">Monthly Spending</h3>
+                <p className="text-2xl font-bold text-gray-900">
+                  ${dashboardStats.totalSpent.toFixed(0)}
+                </p>
               </div>
-              <div className="grid md:grid-cols-2 gap-6">
-                <div>
-                  <p className="text-sm font-medium text-gray-700 mb-2">Merchants</p>
-                  <pre className="text-xs bg-gray-50 p-3 rounded-2xl overflow-auto max-h-64">{JSON.stringify(merchants, null, 2)}</pre>
-                </div>
-                <div>
-                  <p className="text-sm font-medium text-gray-700 mb-2">Sync result</p>
-                  <pre className="text-xs bg-gray-50 p-3 rounded-2xl overflow-auto max-h-64">{JSON.stringify(syncResult, null, 2)}</pre>
-                </div>
-                <div>
-                  <p className="text-sm font-medium text-gray-700 mb-2">Optimize result</p>
-                  <pre className="text-xs bg-gray-50 p-3 rounded-2xl overflow-auto max-h-64">{JSON.stringify(optResult, null, 2)}</pre>
-                </div>
-                <div>
-                  <p className="text-sm font-medium text-gray-700 mb-2">Subscriptions audit</p>
-                  <pre className="text-xs bg-gray-50 p-3 rounded-2xl overflow-auto max-h-64">{JSON.stringify(auditResult, null, 2)}</pre>
-                </div>
-                <div>
-                  <p className="text-sm font-medium text-gray-700 mb-2">Watch add</p>
-                  <pre className="text-xs bg-gray-50 p-3 rounded-2xl overflow-auto max-h-64">{JSON.stringify(watchAddResult, null, 2)}</pre>
-                </div>
-                <div>
-                  <p className="text-sm font-medium text-gray-700 mb-2">Watches</p>
-                  <pre className="text-xs bg-gray-50 p-3 rounded-2xl overflow-auto max-h-64">{JSON.stringify(watchList, null, 2)}</pre>
-                </div>
-                <div>
-                  <div className="flex items-center justify-between mb-2">
-                    <p className="text-sm font-medium text-gray-700">Matches</p>
-                    <Button variant="outline" size="sm" onClick={listMatches}>Refresh</Button>
-                  </div>
-                  <pre className="text-xs bg-gray-50 p-3 rounded-2xl overflow-auto max-h-64">{JSON.stringify(matches, null, 2)}</pre>
-                </div>
-              </div>
-            </motion.div>
+            </div>
+            <div className="text-xs text-gray-500">
+              of ${dashboardStats.monthlyBudget} budget
+            </div>
           </div>
 
-          {/* Sidebar */}
-          <div className="space-y-6">
-            <motion.div
-              initial={{ opacity: 0, y: 20 }}
-              animate={{ opacity: 1, y: 0 }}
-              transition={{ duration: 0.6, delay: 0.4 }}
-              className="bg-white rounded-3xl p-6 shadow-sm border border-gray-100"
-            >
-              <h3 className="font-medium text-gray-900 mb-4">Recent activity</h3>
-              <div className="space-y-3">
-                <div className="flex items-center gap-3 text-sm">
-                  <div className="w-2 h-2 bg-emerald-500 rounded-full"></div>
-                  <span className="text-gray-600">Found new deal: MacBook Pro</span>
-                  <span className="text-gray-400 ml-auto">2m</span>
-                </div>
-                <div className="flex items-center gap-3 text-sm">
-                  <div className="w-2 h-2 bg-blue-500 rounded-full"></div>
-                  <span className="text-gray-600">Price drop alert: iPhone 15</span>
-                  <span className="text-gray-400 ml-auto">1h</span>
-                </div>
-                <div className="flex items-center gap-3 text-sm">
-                  <div className="w-2 h-2 bg-purple-500 rounded-full"></div>
-                  <span className="text-gray-600">Subscription renewed: Spotify</span>
-                  <span className="text-gray-400 ml-auto">3h</span>
-                </div>
+          <div className="bg-white rounded-3xl p-6 shadow-sm border border-gray-100">
+            <div className="flex items-center gap-3 mb-3">
+              <div className="w-10 h-10 bg-gradient-to-br from-blue-500 to-cyan-600 rounded-2xl flex items-center justify-center">
+                <Target className="w-5 h-5 text-white" />
               </div>
-            </motion.div>
+              <div>
+                <h3 className="text-sm font-medium text-gray-700">Price Watches</h3>
+                <p className="text-2xl font-bold text-gray-900">
+                  {dashboardStats.activeWatches}
+                </p>
+              </div>
+            </div>
+            <div className="text-xs text-gray-500">
+              items being tracked
+            </div>
+          </div>
 
-            <motion.div
-              initial={{ opacity: 0, y: 20 }}
-              animate={{ opacity: 1, y: 0 }}
-              transition={{ duration: 0.6, delay: 0.5 }}
-              className="bg-gradient-to-br from-indigo-500 to-purple-600 rounded-3xl p-6 text-white"
-            >
-              <h3 className="font-medium mb-2">Zuno Pro</h3>
-              <p className="text-indigo-100 text-sm mb-4">
-                Get advanced insights and priority deal access
-              </p>
-              <Button variant="secondary" className="w-full bg-white text-gray-900 hover:bg-gray-100">
-                Upgrade now
-              </Button>
-            </motion.div>
+          <div className="bg-white rounded-3xl p-6 shadow-sm border border-gray-100">
+            <div className="flex items-center gap-3 mb-3">
+              <div className="w-10 h-10 bg-gradient-to-br from-purple-500 to-pink-600 rounded-2xl flex items-center justify-center">
+                <CreditCard className="w-5 h-5 text-white" />
+              </div>
+              <div>
+                <h3 className="text-sm font-medium text-gray-700">Subscriptions</h3>
+                <p className="text-2xl font-bold text-gray-900">
+                  {dashboardStats.subscriptionCandidates}
+                </p>
+              </div>
+            </div>
+            <div className="text-xs text-gray-500">
+              potential recurring payments
+            </div>
+          </div>
+
+          <div className="bg-white rounded-3xl p-6 shadow-sm border border-gray-100">
+            <div className="flex items-center gap-3 mb-3">
+              <div className="w-10 h-10 bg-gradient-to-br from-orange-500 to-red-600 rounded-2xl flex items-center justify-center">
+                <TrendingUp className="w-5 h-5 text-white" />
+              </div>
+              <div>
+                <h3 className="text-sm font-medium text-gray-700">Potential Savings</h3>
+                <p className="text-2xl font-bold text-gray-900">
+                  ${dashboardStats.potentialSavings.toFixed(0)}
+                </p>
+              </div>
+            </div>
+            <div className="text-xs text-gray-500">
+              from price alerts
+            </div>
+          </div>
+        </motion.div>
+
+        {/* Main Dashboard Grid */}
+        <div className="grid lg:grid-cols-3 gap-8">
+          {/* Left Column - Main Features */}
+          <div className="lg:col-span-2 space-y-8">
+            {/* Spendometer */}
+            <Spendometer 
+              monthlyBudget={dashboardStats.monthlyBudget}
+              currentSpending={dashboardStats.totalSpent}
+              transactions={transactions}
+              overrideTotal={(loadBudgetSnapshot() && loadBudgetSnapshot().totalMonth) || undefined}
+              overrideCategories={(loadBudgetSnapshot() && loadBudgetSnapshot().byMerchant) || undefined}
+            />
+
+            {/* Transaction Visualization */}
+            <TransactionVisualization 
+              transactions={transactions}
+              merchants={merchants}
+            />
+
+            {/* Deal Recommendations - personalized by spending summary */}
+            <DealRecommendationsWidget spendingSummary={spendingSummary} />
+          </div>
+
+          {/* Right Column - Secondary Features */}
+          <div className="space-y-8">
+            {/* Price Tracking Widget */}
+            <PriceTrackingWidget 
+              watches={watchList}
+              matches={matches}
+            />
+
+            {/* Subscription Audit Widget */}
+            <SubscriptionAuditWidget 
+              auditData={auditResult}
+            />
+            
+
+            
           </div>
         </div>
       </div>

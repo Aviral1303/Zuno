@@ -477,6 +477,21 @@ def knot_get(path: str, timeout: int = 30):
     return resp.status_code, resp.ok, data
 def _mock_amazon_transactions(limit: int = 10) -> list[dict]:
     now = datetime.utcnow()
+    
+    # Realistic product names matching frontend analytics.js
+    product_names = [
+        "Wireless Bluetooth Earbuds",
+        "USB-C Fast Charging Cable (6ft)", 
+        "Logitech Wireless Mouse M185",
+        "Kitchen Towels 6-Pack, Cotton",
+        "Home Decor Set",
+        "Household Supplies", 
+        "Bulk Groceries",
+        "Dinner Order",
+        "Weekly Groceries",
+        "Lunch Order"
+    ]
+    
     base = [
         {
             "datetime": (now - timedelta(days=i*7)).isoformat() + "Z",
@@ -486,7 +501,7 @@ def _mock_amazon_transactions(limit: int = 10) -> list[dict]:
             "products": [
                 {
                     "external_id": f"ASIN{i:03d}",
-                    "name": f"Sample Item {i}",
+                    "name": product_names[i-1] if i-1 < len(product_names) else f"Product {i}",
                     "quantity": 1,
                     "price": {"total": f"{19.99 + i:.2f}"},
                     "url": "https://www.amazon.com/dp/B000000000"
@@ -895,8 +910,6 @@ def _host_to_merchant(host: str) -> tuple[int | None, str]:
         return 165, 'Costco'
     if 'instacart.com' in h:
         return 40, 'Instacart'
-    if 'bestbuy.com' in h:
-        return 77, 'BestBuy'
     return None, h
 
 def _normalize_result(url: str, title: str | None, snippet: str | None, image: str | None, html: str | None) -> dict:
@@ -942,7 +955,7 @@ def dealhunter_claude_search():
 
         # Trusted merchant hosts and product URL patterns
         TRUSTED_HOSTS = (
-            'amazon.', 'walmart.com', 'target.com', 'bestbuy.com'
+            'amazon.', 'walmart.com', 'target.com'
         )
         def _is_trusted_host(host: str) -> bool:
             h = (host or '').lower()
@@ -957,8 +970,6 @@ def dealhunter_claude_search():
                     return '/ip/' in p
                 if 'target.com' in h:
                     return bool(re.search(r'/A-\d+', p))
-                if 'bestbuy.com' in h:
-                    return '/site/' in p and ('/p' in p or '/skuId' in p or re.search(r'-p$', p))
             except Exception:
                 return False
             return True
@@ -970,8 +981,8 @@ def dealhunter_claude_search():
             try:
                 headers = {"X-Subscription-Token": brave_key}
                 # Constrain query to trusted domains
-                site_filter = " (site:amazon.com OR site:walmart.com OR site:target.com OR site:bestbuy.com)"
-                q = query + site_filter if all(s not in query for s in ['site:amazon.com','site:walmart.com','site:target.com','site:bestbuy.com']) else query
+                site_filter = " (site:amazon.com OR site:walmart.com OR site:target.com)"
+                q = query + site_filter if all(s not in query for s in ['site:amazon.com','site:walmart.com','site:target.com']) else query
                 r = requests.get(
                     "https://api.search.brave.com/res/v1/web/search",
                     params={"q": q, "count": 20},
@@ -993,7 +1004,7 @@ def dealhunter_claude_search():
         if brave_key and not results:
             try:
                 headers = {"X-Subscription-Token": brave_key}
-                rq = query + " site:amazon.com OR site:walmart.com OR site:target.com OR site:bestbuy.com"
+                rq = query + " site:amazon.com OR site:walmart.com OR site:target.com"
                 rs = requests.get(
                     "https://api.search.brave.com/res/v1/shopping/search",
                     params={"q": rq, "count": 20},

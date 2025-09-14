@@ -48,8 +48,8 @@ const aiAgents = [
     features: ["Occasion reminders", "Personalized suggestions", "Budget optimization"]
   },
   {
-    name: "Budget Advisor",
-    description: "Smart spending insights and recommendations to optimize your shopping budget",
+    name: "Spending Tracker",
+    description: "A tool that helps you track your spending and save money",
     icon: CreditCard,
     color: "from-orange-500 to-amber-600",
     url: "BudgetAdvisor", 
@@ -67,7 +67,12 @@ const aiAgents = [
 
 export default function AIAgentsSection() {
   return (
-    <section className="py-24 px-6 bg-white relative overflow-hidden">
+    <section className="py-24 px-6 relative overflow-hidden">
+      {/* subtle background gradient blobs */}
+      <div className="pointer-events-none absolute inset-0 -z-10">
+        <div className="absolute -top-24 -left-24 w-[420px] h-[420px] rounded-full blur-3xl opacity-30 bg-gradient-to-br from-indigo-200 to-purple-200" />
+        <div className="absolute -bottom-24 -right-24 w-[420px] h-[420px] rounded-full blur-3xl opacity-30 bg-gradient-to-br from-emerald-200 to-cyan-200" />
+      </div>
       <div className="max-w-7xl mx-auto">
         <motion.div
           initial={{ opacity: 0, y: 30 }}
@@ -100,7 +105,7 @@ export default function AIAgentsSection() {
               viewport={{ once: true }}
               className="group"
             >
-              <div className="bg-gray-50 rounded-3xl p-8 hover:bg-white hover:shadow-xl transition-all duration-300 border border-gray-100 h-full">
+              <div className="rounded-3xl p-8 h-full border border-gray-100 backdrop-blur-md bg-white/70 hover:bg-white/90 shadow-sm hover:shadow-xl transition-all duration-300">
                 <div className={`w-16 h-16 bg-gradient-to-r ${agent.color} rounded-2xl flex items-center justify-center mb-6 group-hover:scale-110 transition-transform duration-300`}>
                   <agent.icon className="w-8 h-8 text-white" />
                 </div>
@@ -116,7 +121,7 @@ export default function AIAgentsSection() {
                 <ul className="space-y-2 mb-8">
                   {agent.features.map((feature, i) => (
                     <li key={i} className="flex items-center gap-2 text-sm text-gray-600">
-                      <div className="w-1.5 h-1.5 bg-indigo-600 rounded-full"></div>
+                      <div className="w-1.5 h-1.5 bg-indigo-600/80 group-hover:bg-indigo-600 rounded-full"></div>
                       {feature}
                     </li>
                   ))}
@@ -125,7 +130,7 @@ export default function AIAgentsSection() {
                 <Link to={createPageUrl(agent.url)}>
                   <Button 
                     variant="outline" 
-                    className="w-full group-hover:bg-indigo-600 group-hover:text-white group-hover:border-indigo-600 transition-all duration-300"
+                    className="w-full rounded-2xl group-hover:bg-indigo-600 group-hover:text-white group-hover:border-indigo-600 transition-all duration-300"
                   >
                     Try {agent.name}
                     <ArrowRight className="w-4 h-4 ml-2" />
@@ -144,7 +149,7 @@ export default function AIAgentsSection() {
           className="text-center mt-16"
         >
           <Link to={createPageUrl("Dashboard")}>
-            <Button size="lg" className="bg-indigo-600 hover:bg-indigo-700 text-white px-8 py-4 rounded-2xl">
+            <Button size="lg" className="bg-indigo-600 hover:bg-indigo-700 text-white px-8 py-4 rounded-3xl shadow-lg">
               Access Full Dashboard
               <ArrowRight className="w-5 h-5 ml-2" />
             </Button>

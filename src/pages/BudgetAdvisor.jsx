@@ -1,7 +1,8 @@
-import React, { useMemo, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import { motion } from "framer-motion";
 import { CreditCard } from "lucide-react";
 import { Switch } from "@/components/ui/switch";
+import { saveBudgetSnapshot, getDummyTransactions } from "@/lib/analytics";
 
 function PieChart({ data = [], size = 200 }) {
   const total = data.reduce((s, d) => s + (d.value || 0), 0);
@@ -31,8 +32,24 @@ function PieChart({ data = [], size = 200 }) {
 
 export default function BudgetAdvisor() {
   const [annual, setAnnual] = useState(false);
+  const [transactions, setTransactions] = useState([]);
+  const baseUrl = import.meta.env.VITE_API_BASE_URL || 'http://localhost:5001';
 
-  // Dummy monthly spend estimates for an average U.S. household (illustrative only)
+  // Load recent transactions across merchants (mock if Knot disabled)
+  useEffect(() => {
+    const load = async () => {
+      try {
+        // Use same dummy transactions as backend endpoint
+        const res = await fetch(`${baseUrl}/knot/amazon/transactions?external_user_id=zuno_user_123&limit=100&mock=1`);
+        const data = await res.json();
+        const all = (data && data.data && data.data.transactions) ? data.data.transactions : [];
+        setTransactions(all);
+      } catch {}
+    };
+    load();
+  }, []);
+
+  // Compute spending per merchant from real transactions (fallback to estimates)
   const dummySpend = useMemo(() => ({
     target: 260,
     walmart: 320,
@@ -42,18 +59,46 @@ export default function BudgetAdvisor() {
     ubereats: 95,
   }), []);
 
-  // Use a constant baseline estimate for Amazon in this view
-  const amazonTotal = 420;
+  // Derive Amazon spending from transactions (fallback 420)
+  const amazonTotal = useMemo(() => {
+    try {
+      return transactions
+        .filter(t => (t.merchant?.name || '').toLowerCase().includes('amazon'))
+        .reduce((s, t) => s + parseFloat(t.price?.total || t.price?.amount || 0), 0) || 420;
+    } catch {
+      return 420;
+    }
+  }, [transactions]);
 
-  const merchants = useMemo(() => ([
-    { key: 'amazon', name: 'Amazon', value: Math.max(amazonTotal, 420), color: '#6366f1' },
-    { key: 'target', name: 'Target', value: dummySpend.target, color: '#ef4444' },
-    { key: 'walmart', name: 'Walmart', value: dummySpend.walmart, color: '#10b981' },
-    { key: 'costco', name: 'Costco', value: dummySpend.costco, color: '#f59e0b' },
-    { key: 'doordash', name: 'DoorDash', value: dummySpend.doordash, color: '#8b5cf6' },
-    { key: 'instacart', name: 'Instacart', value: dummySpend.instacart, color: '#14b8a6' },
-    { key: 'ubereats', name: 'UberEats', value: dummySpend.ubereats, color: '#06b6d4' },
-  ]), [amazonTotal, dummySpend]);
+  const merchants = useMemo(() => {
+    // Aggregate by known merchant names
+    const sumBy = (needle) => transactions
+      .filter(t => (t.merchant?.name || '').toLowerCase().includes(needle))
+      .reduce((s, t) => s + parseFloat(t.price?.total || t.price?.amount || 0), 0);
+
+    const byTarget = sumBy('target') || dummySpend.target;
+    const byWalmart = sumBy('walmart') || dummySpend.walmart;
+    const byCostco = sumBy('costco') || dummySpend.costco;
+    const byDoorDash = sumBy('doordash') || dummySpend.doordash;
+    const byInstacart = sumBy('instacart') || dummySpend.instacart;
+    const byUberEats = sumBy('ubereats') || sumBy('uber') || dummySpend.ubereats;
+
+    const arr = ([
+      { key: 'amazon', name: 'Amazon', value: Math.max(amazonTotal, 420), color: '#6366f1' },
+      { key: 'target', name: 'Target', value: byTarget, color: '#ef4444' },
+      { key: 'walmart', name: 'Walmart', value: byWalmart, color: '#10b981' },
+      { key: 'costco', name: 'Costco', value: byCostco, color: '#f59e0b' },
+      { key: 'doordash', name: 'DoorDash', value: byDoorDash, color: '#8b5cf6' },
+      { key: 'instacart', name: 'Instacart', value: byInstacart, color: '#14b8a6' },
+      { key: 'ubereats', name: 'UberEats', value: byUberEats, color: '#06b6d4' },
+    ]);
+    // Save snapshot for dashboard spendometer
+    try {
+      const total = arr.reduce((s, m) => s + (m.value || 0), 0);
+      saveBudgetSnapshot({ totalMonth: total, byMerchant: Object.fromEntries(arr.map(m => [m.name, m.value])) });
+    } catch {}
+    return arr;
+  }, [amazonTotal, dummySpend, transactions]);
 
   const scaledMerchants = useMemo(() => (
     annual ? merchants.map(m => ({ ...m, value: (m.value || 0) * 12 })) : merchants
@@ -79,6 +124,13 @@ export default function BudgetAdvisor() {
 
   const pieGrandTotal = pieMerchants.reduce((s, m) => s + (m.value || 0), 0);
   const grandTotal = scaledMerchants.reduce((s, m) => s + (m.value || 0), 0);
+
+  const recentTxns = useMemo(() => {
+    // Show fixed dummy set to match design
+    return getDummyTransactions();
+  }, []);
+
+  const formatAmount = (v) => `$${Number(v).toFixed(2)}`;
 
   return (
     <div className="min-h-screen bg-white p-4 md:p-6">
@@ -140,33 +192,22 @@ export default function BudgetAdvisor() {
           </div>
         </div>
 
-        {/* Recent transactions */}
+        {/* Recent transactions (live from backend mock) */}
         <div className="bg-white rounded-3xl p-4 md:p-6 border border-gray-100">
           <div className="flex items-center justify-between mb-3">
             <h3 className="text-sm font-medium text-gray-900">Recent transactions</h3>
             <div className="text-xs text-gray-500">Last 10</div>
           </div>
           <div className="grid gap-3">
-            {[
-              { m: 'Target', what: 'Groceries & essentials', amt: 86.42, at: Date.now() - 1000*60*60*3 },
-              { m: 'Walmart', what: 'Household supplies', amt: 42.15, at: Date.now() - 1000*60*60*7 },
-              { m: 'Costco', what: 'Bulk groceries', amt: 128.90, at: Date.now() - 1000*60*60*24 },
-              { m: 'DoorDash', what: 'Dinner order', amt: 28.40, at: Date.now() - 1000*60*60*30 },
-              { m: 'Instacart', what: 'Weekly groceries', amt: 76.12, at: Date.now() - 1000*60*60*36 },
-              { m: 'UberEats', what: 'Lunch', amt: 18.75, at: Date.now() - 1000*60*60*42 },
-              { m: 'Amazon', what: 'Electronics accessory', amt: 19.99, at: Date.now() - 1000*60*60*50 },
-              { m: 'Target', what: 'Home decor', amt: 34.55, at: Date.now() - 1000*60*60*60 },
-              { m: 'Walmart', what: 'Pet supplies', amt: 24.30, at: Date.now() - 1000*60*60*70 },
-              { m: 'Costco', what: 'Gas & groceries', amt: 92.66, at: Date.now() - 1000*60*60*80 },
-            ].map((t, i) => (
+            {recentTxns.map((t, i) => (
               <div key={i} className="flex items-center justify-between p-3 rounded-xl border border-gray-100 bg-gray-50">
                 <div className="truncate">
-                  <div className="text-sm font-medium text-gray-900 truncate">{t.m}</div>
-                  <div className="text-xs text-gray-500 truncate">{t.what}</div>
+                  <div className="text-sm font-medium text-gray-900 truncate">{t.products?.[0]?.name || t.description || 'Purchase'}</div>
+                  <div className="text-xs text-gray-500 truncate">{t.merchant?.name || 'Merchant'}</div>
                 </div>
                 <div className="text-right">
-                  <div className="text-sm font-semibold text-gray-900">${t.amt.toFixed(2)}</div>
-                  <div className="text-xs text-gray-500">{new Date(t.at).toLocaleString()}</div>
+                  <div className="text-sm font-semibold text-gray-900">{formatAmount(t.price?.total || t.price?.amount || 0)}</div>
+                  <div className="text-xs text-gray-500">{new Date(t.datetime || t.ts).toLocaleDateString()}</div>
                 </div>
               </div>
             ))}

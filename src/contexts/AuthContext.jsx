@@ -19,10 +19,19 @@ export const AuthProvider = ({ children }) => {
   useEffect(() => {
     // Get initial session
     const getInitialSession = async () => {
+      // Seed from cache immediately for faster first paint
+      try {
+        const cached = localStorage.getItem('zuno_profile')
+        if (cached) {
+          try { setProfile(JSON.parse(cached)) } catch {}
+        }
+      } catch {}
+
       const { data: { session } } = await supabase.auth.getSession()
       setUser(session?.user ?? null)
+      // Do not block UI on profile fetch
       if (session?.user) {
-        await fetchProfile(session.user.id)
+        fetchProfile(session.user.id).catch(() => {})
       }
       setLoading(false)
     }
@@ -33,10 +42,12 @@ export const AuthProvider = ({ children }) => {
     const { data: { subscription } } = supabase.auth.onAuthStateChange(
       async (event, session) => {
         setUser(session?.user ?? null)
+        // Don't block UI; fetch profile in background
         if (session?.user) {
-          await fetchProfile(session.user.id)
+          fetchProfile(session.user.id).catch(() => {})
         } else {
           setProfile(null)
+          try { localStorage.removeItem('zuno_profile') } catch {}
         }
         setLoading(false)
       }
@@ -63,6 +74,7 @@ export const AuthProvider = ({ children }) => {
       }
 
       setProfile(data)
+      try { localStorage.setItem('zuno_profile', JSON.stringify(data)) } catch {}
     } catch (error) {
       console.error('Error fetching profile:', error)
       // Don't let profile errors break authentication

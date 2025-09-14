@@ -1,9 +1,10 @@
-import React, { useMemo, useRef, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { motion } from "framer-motion";
 import { Calendar, Loader2, Mic, MicOff, Send } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { useIsMobile } from "@/hooks/use-mobile";
+import { saveBudgetSnapshot } from "@/lib/analytics";
 
 function PieChart({ data = [], size = 180, onSliceEnter, onSliceLeave }) {
   const total = data.reduce((s, d) => s + (d.value || 0), 0);
@@ -66,7 +67,7 @@ export default function Subscriptions() {
     { key: 'doordash', name: 'DoorDash', value: 110, color: '#8b5cf6' },
     { key: 'instacart', name: 'Instacart', value: 160, color: '#14b8a6' },
     { key: 'ubereats', name: 'UberEats', value: 95, color: '#06b6d4' },
-    { key: 'subscriptions', name: 'Streaming/Apps', value: 85, color: '#94a3b8' },
+    { key: 'subscriptions', name: 'Streaming/Apps', value: 0, color: '#94a3b8' },
   ]);
 
   const visibleMerchants = useMemo(
@@ -76,6 +77,14 @@ export default function Subscriptions() {
 
   // Non-linear factors for annual pie to look natural
   const monthlyTotal = visibleMerchants.reduce((s, m) => s + (m.value || 0), 0);
+
+  // Persist snapshot so Dashboard Spendometer mirrors this view
+  useEffect(() => {
+    try {
+      const byMerchant = Object.fromEntries(visibleMerchants.map((m) => [m.name, m.value]));
+      saveBudgetSnapshot({ totalMonth: monthlyTotal, byMerchant });
+    } catch {}
+  }, [monthlyTotal, visibleMerchants]);
 
   const runAudit = async () => {
     setLoading(true);
