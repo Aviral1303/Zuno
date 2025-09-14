@@ -33,8 +33,21 @@ export default function Chat() {
   const [showReasoning, setShowReasoning] = useState(false);
   const messagesEndRef = useRef(null);
   const inputRef = useRef(null);
+  const HISTORY_STORAGE_KEY = 'zuno_chat_history_v1';
+  const [purchasePreview, setPurchasePreview] = useState(null);
+  const [placingOrder, setPlacingOrder] = useState(false);
 
   useEffect(() => {
+    try {
+      const raw = localStorage.getItem(HISTORY_STORAGE_KEY);
+      if (raw) {
+        const saved = JSON.parse(raw);
+        if (Array.isArray(saved) && saved.length) {
+          setMessages(saved);
+          return;
+        }
+      }
+    } catch {}
     const welcomeMessage = {
       message: "Hi! I'm your Zuno shopping concierge. I can help you find deals, track prices, manage subscriptions, and plan gifts. What can I help you with today?",
       sender: "ai",
@@ -63,6 +76,51 @@ export default function Chat() {
   const handleSendMessage = async () => {
     if (!inputMessage.trim()) return;
 
+    // Lightweight buy-intent detection: "buy <url|canonical>" or starts with "/buy"
+    const detectBuy = (text) => {
+      const t = text.trim();
+      const lower = t.toLowerCase();
+      // Extract URL
+      const urlMatch = t.match(/https?:\/\/\S+/i);
+      // Detect canonical like 44:ASINCODE or 12:A-12345
+      const canonicalMatch = t.match(/^(?:buy\s+|\/buy\s+)?(\d+:[A-Za-z0-9\-]+)/i);
+      if (lower.startsWith('buy ') || lower.startsWith('/buy ') || urlMatch || canonicalMatch) {
+        return {
+          url: urlMatch ? urlMatch[0] : undefined,
+          canonical: canonicalMatch && canonicalMatch[1] ? canonicalMatch[1] : undefined,
+        };
+      }
+      return null;
+    };
+
+    const maybeBuy = detectBuy(inputMessage);
+    if (maybeBuy && (maybeBuy.url || maybeBuy.canonical)) {
+      try {
+        const baseUrl = import.meta.env.VITE_API_BASE_URL || 'http://localhost:5001';
+        const res = await fetch(`${baseUrl}/purchase/preview`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ url: maybeBuy.url, canonical_id: maybeBuy.canonical, qty: 1 })
+        });
+        const data = await res.json();
+        if (res.ok && data?.ok) {
+          setPurchasePreview(data);
+          // Also drop a chat message to indicate preview created
+          setMessages(prev => [...prev, { message: 'I prepared a purchase preview. Please confirm.', sender: 'ai', message_type: 'text' }]);
+          setInputMessage('');
+          return;
+        } else {
+          setMessages(prev => [...prev, { message: `Preview failed: ${data?.error || 'Unknown error'}`, sender: 'ai', message_type: 'text' }]);
+          setInputMessage('');
+          return;
+        }
+      } catch (e) {
+        setMessages(prev => [...prev, { message: `Preview failed: ${String(e)}`, sender: 'ai', message_type: 'text' }]);
+        setInputMessage('');
+        return;
+      }
+    }
+
     const userMessage = {
       message: inputMessage,
       sender: "user",
@@ -77,10 +135,14 @@ export default function Chat() {
     try {
       setShowReasoning(true);
       const baseUrl = import.meta.env.VITE_API_BASE_URL || 'http://localhost:5001';
+      const historyPayload = (messages || []).slice(-12).map(m => ({
+        role: m.sender === 'user' ? 'user' : 'ai',
+        content: m.message,
+      }));
       const res = await fetch(`${baseUrl}/llm/chat`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ message: userMessage.message })
+        body: JSON.stringify({ message: userMessage.message, history: historyPayload })
       });
       const data = await res.json();
       setIsTyping(false);
@@ -189,10 +251,14 @@ export default function Chat() {
 
     try {
       const baseUrl = import.meta.env.VITE_API_BASE_URL || 'http://localhost:5001';
+      const historyPayload = (messages || []).slice(-12).map(m => ({
+        role: m.sender === 'user' ? 'user' : 'ai',
+        content: m.message,
+      }));
       const res = await fetch(`${baseUrl}/llm/chat`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ message: transcript })
+        body: JSON.stringify({ message: transcript, history: historyPayload })
       });
       const data = await res.json();
       
@@ -218,12 +284,23 @@ export default function Chat() {
   };
 
   const clearChat = () => {
-    setMessages([{
+    const next = [{
       message: "Chat cleared. How can I help you today?",
       sender: "ai",
       message_type: "text"
-    }]);
+    }];
+    setMessages(next);
+    try { localStorage.removeItem(HISTORY_STORAGE_KEY); } catch {}
   };
+
+  // Persist messages locally for demo memory
+  useEffect(() => {
+    try {
+      if (Array.isArray(messages) && messages.length) {
+        localStorage.setItem(HISTORY_STORAGE_KEY, JSON.stringify(messages));
+      }
+    } catch {}
+  }, [messages]);
 
   const setupVAD = (stream) => {
     try {
@@ -337,6 +414,58 @@ export default function Chat() {
       {/* Input */}
       <div className="bg-white/80 backdrop-blur border-t border-gray-200 p-4 md:p-6 shadow-lg">
         <div className="max-w-4xl mx-auto">
+          {purchasePreview && (
+            <div className="mb-4 rounded-2xl border border-gray-200 bg-white p-4">
+              <div className="flex items-start justify-between gap-3">
+                <div className="flex-1 min-w-0">
+                  <div className="text-sm text-gray-500">{purchasePreview.merchant}</div>
+                  <div className="font-medium text-gray-900 truncate">{purchasePreview.item?.title || 'Item'}</div>
+                  <div className="text-xs text-gray-500 truncate">{purchasePreview.item?.canonical_id}</div>
+                  <div className="mt-2 text-sm text-gray-700">
+                    Subtotal: ${purchasePreview.item?.unit_price_usd?.toFixed?.(2) || purchasePreview.item?.unit_price_usd} × {purchasePreview.item?.qty || 1}
+                    {' '}• Shipping: ${purchasePreview.fees?.shipping?.toFixed?.(2) || purchasePreview.fees?.shipping}
+                    {' '}• Tax: ${purchasePreview.fees?.tax?.toFixed?.(2) || purchasePreview.fees?.tax}
+                  </div>
+                  <div className="text-base font-semibold text-gray-900">Total: ${purchasePreview.total_usd?.toFixed?.(2) || purchasePreview.total_usd}</div>
+                </div>
+                {purchasePreview.item?.image && (
+                  <img src={purchasePreview.item.image} alt="thumb" className="w-16 h-16 object-cover rounded-xl border border-gray-100" />
+                )}
+              </div>
+              <div className="mt-3 flex items-center gap-2">
+                <Button
+                  onClick={async () => {
+                    if (!purchasePreview?.preview_token) return;
+                    setPlacingOrder(true);
+                    try {
+                      const baseUrl = import.meta.env.VITE_API_BASE_URL || 'http://localhost:5001';
+                      const res = await fetch(`${baseUrl}/purchase/confirm`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ preview_token: purchasePreview.preview_token })
+                      });
+                      const data = await res.json();
+                      if (res.ok && data?.ok) {
+                        setMessages(prev => [...prev, { message: `Order placed: ${data.order_id}`, sender: 'ai', message_type: 'text' }]);
+                        setPurchasePreview(null);
+                      } else {
+                        setMessages(prev => [...prev, { message: `Purchase failed: ${data?.error || 'Unknown error'}`, sender: 'ai', message_type: 'text' }]);
+                      }
+                    } catch (e) {
+                      setMessages(prev => [...prev, { message: `Purchase failed: ${String(e)}`, sender: 'ai', message_type: 'text' }]);
+                    } finally {
+                      setPlacingOrder(false);
+                    }
+                  }}
+                  disabled={placingOrder}
+                  className="rounded-2xl"
+                >
+                  {placingOrder ? 'Placing…' : 'Confirm purchase'}
+                </Button>
+                <Button variant="outline" onClick={() => setPurchasePreview(null)} className="rounded-2xl">Cancel</Button>
+              </div>
+            </div>
+          )}
           <div className="flex items-center gap-3 md:gap-4">
             <Button
               variant="outline"

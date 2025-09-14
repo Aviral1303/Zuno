@@ -2229,6 +2229,109 @@ def dealhunter_search():
         logger.error(f"Dealhunter error: {e}")
         return jsonify({"error": str(e)}), 500
 
+@app.route('/purchase/preview', methods=['POST'])
+def purchase_preview():
+    try:
+        data = request.get_json() or {}
+        canonical_id = data.get('canonical_id')
+        url = data.get('url')
+        qty = int(data.get('qty') or 1)
+        address_id = data.get('address_id') or 'addr_demo_1'
+        payment_id = data.get('payment_id') or 'pay_demo_1'
+
+        # Resolve product meta (best-effort)
+        title = None
+        image = None
+        price_usd = None
+        merchant = None
+        if url:
+            try:
+                meta_res = requests.post(f"{request.host_url.rstrip('/')}/product/resolve", json={"url": url}, timeout=20)
+                meta = meta_res.json() if meta_res.status_code == 200 else {}
+                if meta.get('ok'):
+                    title = meta.get('title')
+                    image = meta.get('image')
+                    price_usd = meta.get('price_usd')
+                    merchant = meta.get('merchant_name')
+                    canonical_id = meta.get('canonical') or canonical_id
+            except Exception:
+                pass
+        merchant = merchant or 'Amazon'
+        title = title or 'Item'
+        price_usd = float(price_usd) if isinstance(price_usd, (int, float, str)) and str(price_usd) else 29.99
+        subtotal = price_usd * qty
+        shipping = 0.00 if subtotal >= 35 else 4.99
+        tax = round(subtotal * 0.08, 2)
+        total = round(subtotal + shipping + tax, 2)
+
+        preview_token = f"prev_{int(datetime.utcnow().timestamp())}_{random.randint(1000,9999)}"
+        payload = {
+            "ok": True,
+            "preview_token": preview_token,
+            "merchant": merchant,
+            "item": {
+                "title": title,
+                "image": image,
+                "canonical_id": canonical_id or url or "unknown",
+                "unit_price_usd": round(price_usd, 2),
+                "qty": qty,
+            },
+            "fees": {"shipping": shipping, "tax": tax},
+            "total_usd": total,
+            "ship_to": {"address_id": address_id},
+            "pay_with": {"payment_id": payment_id},
+            "expires_in_sec": 180,
+        }
+        return jsonify(payload)
+    except Exception as e:
+        logger.error(f"purchase_preview error: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route('/purchase/confirm', methods=['POST'])
+def purchase_confirm():
+    try:
+        data = request.get_json() or {}
+        token = data.get('preview_token')
+        if not token:
+            return jsonify({"error": "missing preview_token"}), 400
+        # In real flow: validate token, run checkout with merchant/Knot
+        order_id = f"ord_{int(datetime.utcnow().timestamp())}_{random.randint(1000,9999)}"
+        return jsonify({"ok": True, "order_id": order_id, "status": "PLACED", "placed_at": datetime.utcnow().isoformat() + "Z"})
+    except Exception as e:
+        logger.error(f"purchase_confirm error: {e}")
+        return jsonify({"error": str(e)}), 500
+
+# Tool schemas (for future function-calling LLMs)
+PURCHASE_TOOLS = {
+    "purchase_preview": {
+        "description": "Create a purchase preview for an item before checkout.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "url": {"type": "string", "description": "Product URL if available"},
+                "canonical_id": {"type": "string", "description": "Canonical id like 44:ASIN or 12:A-xxxxx"},
+                "qty": {"type": "integer", "minimum": 1, "default": 1},
+                "address_id": {"type": "string"},
+                "payment_id": {"type": "string"}
+            },
+            "required": [],
+            "additionalProperties": False
+        }
+    },
+    "purchase_confirm": {
+        "description": "Confirm a previously created purchase preview.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "preview_token": {"type": "string"}
+            },
+            "required": ["preview_token"],
+            "additionalProperties": False
+        }
+    }
+}
+
 if __name__ == '__main__':
     # Load model on startup unless disabled via env toggle
     if not SKIP_WHISPER:
