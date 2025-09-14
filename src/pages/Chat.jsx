@@ -35,16 +35,12 @@ export default function Chat() {
   const inputRef = useRef(null);
 
   useEffect(() => {
-    loadMessages();
-    // Welcome message
-    setTimeout(() => {
-      const welcomeMessage = {
-        message: "Hi! I'm your Zuno shopping concierge. I can help you find deals, track prices, manage subscriptions, and plan gifts. What can I help you with today?",
-        sender: "ai",
-        message_type: "text"
-      };
-      setMessages([welcomeMessage]);
-    }, 500);
+    const welcomeMessage = {
+      message: "Hi! I'm your Zuno shopping concierge. I can help you find deals, track prices, manage subscriptions, and plan gifts. What can I help you with today?",
+      sender: "ai",
+      message_type: "text"
+    };
+    setMessages([welcomeMessage]);
   }, []);
 
   useEffect(() => {
@@ -314,14 +310,16 @@ export default function Chat() {
       </div>
 
       {/* Messages */}
-      <div className="flex-1 overflow-y-auto p-6 bg-gray-50">
+      <div className="flex-1 overflow-y-auto p-6 bg-gradient-to-b from-slate-50 to-white">
         <div className="max-w-4xl mx-auto">
           <AnimatePresence>
             {messages.map((message, index) => (
-              <ChatBubble 
-                key={index} 
-                message={message} 
+              <ChatBubble
+                key={index}
+                message={message}
                 index={index}
+                prevSender={index > 0 ? messages[index - 1]?.sender : undefined}
+                timestamp={message.timestamp}
               />
             ))}
           </AnimatePresence>
@@ -337,9 +335,9 @@ export default function Chat() {
       </div>
 
       {/* Input */}
-      <div className="bg-white border-t border-gray-200 p-6 shadow-lg">
+      <div className="bg-white/80 backdrop-blur border-t border-gray-200 p-4 md:p-6 shadow-lg">
         <div className="max-w-4xl mx-auto">
-          <div className="flex items-center gap-4">
+          <div className="flex items-center gap-3 md:gap-4">
             <Button
               variant="outline"
               size="icon"
@@ -375,7 +373,7 @@ export default function Chat() {
                 onChange={(e) => setInputMessage(e.target.value)}
                 onKeyPress={handleKeyPress}
                 placeholder="Ask me about deals, gifts, subscriptions..."
-                className="bg-gray-50 border-gray-200 text-gray-900 placeholder-gray-500 rounded-2xl pr-12 focus:ring-2 focus:ring-indigo-500 focus:border-transparent"
+                className="bg-gray-50 border-gray-200 text-gray-900 placeholder-gray-500 rounded-2xl pr-10 md:pr-12 focus:ring-2 focus:ring-indigo-500 focus:border-transparent shadow-sm"
               />
               
               {isRecording && (

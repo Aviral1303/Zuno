@@ -4,9 +4,11 @@ import { User, Bot, ShoppingBag, ThumbsUp, ThumbsDown } from 'lucide-react';
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 
-export default function ChatBubble({ message, index }) {
+export default function ChatBubble({ message, index, prevSender, timestamp }) {
   const isUser = message.sender === 'user';
   const isDealtRecommendation = message.message_type === 'deal_recommendation';
+  const showHeader = !isUser && prevSender !== message.sender;
+  const timeText = timestamp ? new Date(timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '';
   
   return (
     <motion.div
@@ -16,7 +18,7 @@ export default function ChatBubble({ message, index }) {
       className={`flex gap-3 mb-6 ${isUser ? 'flex-row-reverse' : 'flex-row'}`}
     >
       {/* Avatar */}
-      <div className={`w-10 h-10 rounded-full flex items-center justify-center flex-shrink-0 ${
+      <div className={`w-10 h-10 rounded-xl flex items-center justify-center flex-shrink-0 shadow ${
         isUser 
           ? 'bg-gradient-to-br from-indigo-600 to-purple-600' 
           : 'bg-gradient-to-br from-emerald-500 to-teal-500'
@@ -30,25 +32,31 @@ export default function ChatBubble({ message, index }) {
 
       {/* Message Content */}
       <div className={`max-w-2xl ${isUser ? 'items-end' : 'items-start'} flex flex-col`}>
-        <div className={`rounded-3xl p-4 ${
+        {showHeader && (
+          <div className="text-[10px] uppercase tracking-wider text-gray-400 mb-1">Zuno Concierge</div>
+        )}
+        <div className={`rounded-2xl p-4 shadow-sm border ${
           isUser 
-            ? 'bg-gradient-to-r from-indigo-600 to-purple-600 text-white ml-auto' 
-            : 'bg-white text-gray-900 border border-gray-200 shadow-sm'
+            ? 'bg-gradient-to-r from-indigo-600 to-purple-600 text-white ml-auto border-transparent' 
+            : 'bg-white text-gray-900 border-gray-200'
         }`}>
           {isDealtRecommendation ? (
             <DealRecommendation message={message} />
           ) : (
-            <p className="text-sm leading-relaxed">{message.message}</p>
+            <p className="text-sm leading-relaxed whitespace-pre-wrap">{message.message}</p>
           )}
         </div>
+        {!isUser && timeText && (
+          <div className="text-[10px] text-gray-400 mt-1">{timeText}</div>
+        )}
         
         {!isUser && !isDealtRecommendation && (
           <div className="flex items-center gap-2 mt-2">
-            <Button variant="ghost" size="sm" className="text-gray-500 hover:text-gray-700 hover:bg-gray-100 h-8">
+            <Button variant="ghost" size="sm" className="text-gray-500 hover:text-gray-700 hover:bg-gray-100 h-8 rounded-xl">
               <ThumbsUp className="w-3 h-3 mr-1" />
               Helpful
             </Button>
-            <Button variant="ghost" size="sm" className="text-gray-500 hover:text-gray-700 hover:bg-gray-100 h-8">
+            <Button variant="ghost" size="sm" className="text-gray-500 hover:text-gray-700 hover:bg-gray-100 h-8 rounded-xl">
               <ThumbsDown className="w-3 h-3 mr-1" />
               Not helpful
             </Button>

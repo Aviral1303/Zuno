@@ -7,7 +7,7 @@ import { Input } from "@/components/ui/input";
 export default function DealHunter() {
   const [query, setQuery] = useState("");
   const [budget, setBudget] = useState("");
-  const [merchants, setMerchants] = useState({ 44: true, 12: true, 45: true }); // Amazon, Target, Walmart
+  const [merchants, setMerchants] = useState({ 44: true, 12: true, 45: true }); // kept for legacy; not shown in UI
   const [loading, setLoading] = useState(false);
   const [results, setResults] = useState([]);
   const [error, setError] = useState("");
@@ -19,6 +19,7 @@ export default function DealHunter() {
   const [loadingTransactions, setLoadingTransactions] = useState(false);
   const [trackLoading, setTrackLoading] = useState({});
   const [trackedKeys, setTrackedKeys] = useState(new Set());
+  const useWebSearch = true;
 
   const baseUrl = import.meta.env.VITE_API_BASE_URL || "http://localhost:5001";
 
@@ -198,6 +199,36 @@ export default function DealHunter() {
     }
   };
 
+  const enrichMissingPrices = async (items) => {
+    try {
+      const indices = [];
+      const tasks = items.map((it, idx) => {
+        const hasPrice = typeof it.price_total === 'number' || typeof it.price_usd === 'number';
+        const u = it.url;
+        if (hasPrice || !u) return null;
+        indices.push(idx);
+        return fetch(`${baseUrl}/product/resolve`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ url: u })
+        })
+        .then(r => r.json().catch(() => ({})))
+        .then(data => ({ idx, price: data?.price_usd }))
+        .catch(() => null);
+      }).filter(Boolean);
+      if (!tasks.length) return items;
+      const resolved = await Promise.all(tasks);
+      const next = [...items];
+      resolved.forEach((res) => {
+        if (!res || res.price == null) return;
+        next[res.idx] = { ...next[res.idx], price_usd: res.price };
+      });
+      return next;
+    } catch {
+      return items;
+    }
+  };
+
   const handleSearch = async (e) => {
     e?.preventDefault?.();
     setError("");
@@ -222,27 +253,47 @@ export default function DealHunter() {
         }
       }
 
-      const payload = {
-        query,
-        merchants: selectedMerchantIds.length ? selectedMerchantIds : [44, 12, 45],
-        limit: 20,
-        explain: true,
-        explain_top_k: 3,
-        external_user_id: 'zuno_user_123'
-      };
       const budgetNum = Number(budget);
-      if (!Number.isNaN(budgetNum) && budgetNum > 0) {
-        payload.budget_cents = Math.round(budgetNum * 100);
+      const budgetCents = !Number.isNaN(budgetNum) && budgetNum > 0 ? Math.round(budgetNum * 100) : undefined;
+
+      if (useWebSearch) {
+        const res = await fetch(`${baseUrl}/dealhunter/claude_search`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ query, budget_cents: budgetCents, max_results: 9 }),
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data?.error || 'Web search failed');
+        const items = (data.items || []).map((it) => ({
+          title: it.title,
+          url: it.url,
+          external_id: it.url,
+          merchant: it.merchant_name || 'Web',
+          price_total: typeof it.price_usd === 'number' ? it.price_usd : undefined,
+          image: it.image,
+          explanation: it.reason,
+        }));
+        const enriched = await enrichMissingPrices(items);
+        setResults(enriched);
+      } else {
+        const payload = {
+          query,
+          merchants: selectedMerchantIds.length ? selectedMerchantIds : [44, 12, 45],
+          limit: 20,
+          explain: true,
+          explain_top_k: 3,
+          external_user_id: 'zuno_user_123'
+        };
+        if (budgetCents) payload.budget_cents = budgetCents;
+        const res = await fetch(`${baseUrl}/dealhunter/search`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload),
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data?.error || "Search failed");
+        setResults(data?.items || []);
       }
-      
-      const res = await fetch(`${baseUrl}/dealhunter/search`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload),
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data?.error || "Search failed");
-      setResults(data?.items || []);
     } catch (err) {
       setError(err.message || "Search failed");
     } finally {
@@ -325,21 +376,6 @@ export default function DealHunter() {
           </div>
 
           <div className="mt-4 flex flex-wrap items-center gap-3 text-sm">
-            <span className="text-gray-600">Merchants:</span>
-            <label className="flex items-center gap-2 cursor-pointer select-none">
-              <input type="checkbox" checked={!!merchants[44]} onChange={() => toggleMerchant(44)} /> 
-              <span className="flex items-center gap-1">
-                Amazon
-                {amazonConnected && <Shield className="w-3 h-3 text-green-600" />}
-              </span>
-            </label>
-            <label className="flex items-center gap-2 cursor-pointer select-none">
-              <input type="checkbox" checked={!!merchants[12]} onChange={() => toggleMerchant(12)} /> Target
-            </label>
-            <label className="flex items-center gap-2 cursor-pointer select-none">
-              <input type="checkbox" checked={!!merchants[45]} onChange={() => toggleMerchant(45)} /> Walmart
-            </label>
-            
             {knotInitialized && (
               <>
                 <Button 
@@ -362,6 +398,10 @@ export default function DealHunter() {
                 </Button>
               </>
             )}
+            <label className="flex items-center gap-2 cursor-pointer select-none ml-auto">
+              <input type="checkbox" checked={useWebSearch} onChange={() => setUseWebSearch((v) => !v)} />
+              <span>Use web search (Claude)</span>
+            </label>
           </div>
         </form>
 
@@ -389,20 +429,28 @@ export default function DealHunter() {
           <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-6">
             {results.map((item, idx) => (
               <motion.div
-                key={`${item.merchant_id}-${item.external_id}-${idx}`}
+                key={`${item.url || item.external_id || idx}`}
                 initial={{ opacity: 0, y: 12 }}
                 animate={{ opacity: 1, y: 0 }}
                 transition={{ duration: 0.25 }}
                 className="bg-white rounded-2xl border border-gray-100 p-4 shadow-sm"
               >
                 <div className="flex items-start justify-between gap-4">
-                  <div>
+                  <div className="flex-1 min-w-0">
                     <h4 className="text-gray-900 font-medium line-clamp-2">{item.title || "Untitled"}</h4>
                     <p className="text-xs text-gray-500 mt-1">{item.merchant || "Unknown merchant"}</p>
+                    {item.explanation ? (
+                      <p className="text-xs text-gray-600 mt-2 line-clamp-3">{item.explanation}</p>
+                    ) : null}
                   </div>
+                  {item.image && (
+                    <img src={item.image} alt="thumb" className="w-20 h-20 object-cover rounded-xl border border-gray-100" />
+                  )}
                   <div className="text-right">
                     <div className="text-sm text-gray-900 font-semibold">
-                      {typeof item.price_total === "number" ? `$${item.price_total.toFixed(2)}` : "—"}
+                      {typeof item.price_total === 'number'
+                        ? `$${item.price_total.toFixed(2)}`
+                        : (typeof item.price_usd === 'number' ? `$${item.price_usd.toFixed(2)}` : '—')}
                     </div>
                     {item.has_discount ? (
                       <span className="text-emerald-600 text-xs">Discount detected</span>

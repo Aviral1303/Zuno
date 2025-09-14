@@ -3,6 +3,7 @@ import { motion } from "framer-motion";
 import { Calendar, Loader2, Mic, MicOff, Send } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { useIsMobile } from "@/hooks/use-mobile";
 
 function PieChart({ data = [], size = 180, onSliceEnter, onSliceLeave }) {
   const total = data.reduce((s, d) => s + (d.value || 0), 0);
@@ -41,6 +42,7 @@ function PieChart({ data = [], size = 180, onSliceEnter, onSliceLeave }) {
 
 export default function Subscriptions() {
   const baseUrl = import.meta.env.VITE_API_BASE_URL || 'http://localhost:5001';
+  const isMobile = useIsMobile();
   const [monthlyBudget, setMonthlyBudget] = useState("2500");
   const [aiLoading, setAiLoading] = useState(false);
   const [aiText, setAiText] = useState("");
@@ -117,6 +119,14 @@ export default function Subscriptions() {
     }
   };
 
+  const buildHistory = () => {
+    try {
+      return chatMessages.map((m) => ({ role: m.role, content: m.text }));
+    } catch (_) {
+      return [];
+    }
+  };
+
   const askBudgetAdvisor = async (question) => {
     const lines = monthlyMerchants.map(m => `${m.name}: $${m.value.toFixed(0)}`).join("; ");
     const systemPrompt = "You are the Budget Advisor AI Agent. Your focus is on spending insights, budget optimization, and cost-saving strategies for shopping within the app. Stay within the scope of budgeting, spending analysis, and financial guidance. If unrelated topics come up, politely decline and bring the conversation back to budgeting. Respond in a clear, analytical, and supportive tone.";
@@ -124,7 +134,7 @@ export default function Subscriptions() {
     const res = await fetch(`${baseUrl}/llm/chat`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ message: msg, system: systemPrompt })
+      body: JSON.stringify({ message: msg, system: systemPrompt, history: buildHistory() })
     });
     const data = await res.json();
     return res.ok && data?.reply ? data.reply : "- Unable to answer right now.";
@@ -139,7 +149,7 @@ export default function Subscriptions() {
       const res = await fetch(`${baseUrl}/llm/chat`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ message: msg, system: systemPrompt })
+        body: JSON.stringify({ message: msg, system: systemPrompt, history: buildHistory() })
       });
       const data = await res.json();
       if (res.ok && data?.reply) {
@@ -254,17 +264,17 @@ export default function Subscriptions() {
         </motion.div>
 
         {/* Budget overview */}
-        <div className="bg-white rounded-3xl p-6 border border-gray-100 mb-6">
-          <div className="flex items-center justify-between mb-4">
+        <div className="bg-white rounded-3xl p-4 md:p-6 border border-gray-100 mb-6">
+          <div className="flex flex-col md:flex-row md:items-center items-stretch justify-between gap-4 mb-4">
             <h2 className="text-xl font-light text-gray-900">Monthly spend</h2>
-            <div className="flex items-center gap-2">
-              <div className="flex flex-col">
+            <div className="flex items-stretch md:items-center gap-3 md:gap-2">
+              <div className="flex flex-col flex-1 md:flex-initial">
                 <span className="text-xs text-gray-600 mb-1">Monthly budget (USD) </span>
                 <Input
                   value={monthlyBudget}
                   onChange={(e) => setMonthlyBudget(e.target.value)}
                   placeholder="Enter amount"
-                  className="w-44 bg-gray-50"
+                  className="bg-gray-50 md:w-44"
                   type="number"
                   min={0}
                 />
@@ -295,7 +305,7 @@ export default function Subscriptions() {
                   style={{ width: `${Math.min(100, (monthlyTotal / Math.max(1, Number(monthlyBudget || 1))) * 100).toFixed(1)}%` }}
                 />
               </div>
-            </div>
+        </div>
 
             <div className="flex items-center gap-2 text-sm text-gray-600 mb-2">
               <span>By merchant</span>
@@ -303,7 +313,7 @@ export default function Subscriptions() {
             <div className="flex flex-col items-center justify-center">
               <PieChart
                 data={visibleMerchants}
-                size={240}
+                size={isMobile ? 180 : 240}
                 onSliceEnter={(d, frac) => setHovered({ d, frac })}
                 onSliceLeave={() => setHovered(null)}
               />
@@ -491,8 +501,8 @@ export default function Subscriptions() {
                       {m.role === 'user' ? `You: ${m.text}` : m.text}
                     </div>
                   ))}
-                </div>
-              )}
+          </div>
+        )}
             </div>
           </div>
         </div>

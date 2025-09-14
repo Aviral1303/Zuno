@@ -15,6 +15,10 @@ import logging
 import os.path as osp
 from langchain_openai import ChatOpenAI
 from langchain.schema import HumanMessage, SystemMessage
+try:
+    from langchain.schema import AIMessage
+except Exception:
+    AIMessage = None
 from openai import OpenAI
 import requests
 import re
@@ -24,6 +28,7 @@ import random
 from datetime import datetime, timedelta, timezone
 from collections import defaultdict
 from apscheduler.schedulers.background import BackgroundScheduler
+from urllib.parse import urlparse
 
 # Load environment variables
 load_dotenv()
@@ -298,7 +303,7 @@ def transcribe_from_url():
         # Save downloaded file temporarily
         with tempfile.NamedTemporaryFile(delete=False, suffix='.wav') as tmp_file:
             tmp_file.write(response.content)
-            tmp_file.flush()
+            tmp_file.flush()    
             
             try:
                 # Preprocess audio
@@ -334,6 +339,7 @@ def llm_chat():
     try:
         data = request.get_json() or {}
         user_input = data.get('message') or data.get('prompt')
+        history = data.get('history') or []
         system_prompt = data.get('system') or (
             "You are Zuno's helpful shopping concierge."
             " Always respond in fluent, clear English."
@@ -345,7 +351,29 @@ def llm_chat():
         # First attempt with configured/default model
         try:
             llm = get_llm()
-            messages = [SystemMessage(content=system_prompt), HumanMessage(content=user_input)]
+            # Build contextual message list from history
+            messages = [SystemMessage(content=system_prompt)]
+            def _role_of(item: dict) -> str:
+                r = (item.get('role') or item.get('sender') or '').lower()
+                return 'user' if r in ('user','human') else 'ai'
+            # keep last 12 turns for brevity
+            items = history[-12:] if isinstance(history, list) else []
+            for it in items:
+                try:
+                    content = (it.get('content') if isinstance(it, dict) else None) or (it.get('message') if isinstance(it, dict) else None) or ''
+                    if not content:
+                        continue
+                    if _role_of(it) == 'user':
+                        messages.append(HumanMessage(content=content))
+                    else:
+                        if AIMessage is not None:
+                            messages.append(AIMessage(content=content))
+                        else:
+                            # Fallback: include assistant text as part of system to preserve context lightly
+                            messages.append(SystemMessage(content=f"Assistant said: {content}"))
+                except Exception:
+                    continue
+            messages.append(HumanMessage(content=user_input))
             # Encourage non-repetitive, focused output (Cerebras may not support penalties)
             llm.temperature = 0.3
             llm.max_tokens = 512
@@ -769,6 +797,34 @@ def _extract_title_and_price(html: str, merchant: str | None = None) -> tuple[st
 
     return title, price
 
+def _extract_og_meta(html: str) -> dict:
+    data = {}
+    try:
+        m = re.search(r'<meta[^>]+property=["\']og:title["\'][^>]+content=["\']([^"\']+)["\']', html, flags=re.I)
+        if m:
+            data['title'] = htmllib.unescape(m.group(1).strip())
+    except Exception:
+        pass
+    try:
+        m = re.search(r'<meta[^>]+property=["\']og:image["\'][^>]+content=["\']([^"\']+)["\']', html, flags=re.I)
+        if m:
+            data['image'] = m.group(1).strip()
+    except Exception:
+        pass
+    try:
+        m = re.search(r'<meta[^>]+property=["\']product:price:amount["\'][^>]+content=["\']([^"\']+)["\']', html, flags=re.I)
+        if m:
+            data['price'] = float(m.group(1).replace(',', ''))
+    except Exception:
+        pass
+    try:
+        m = re.search(r'<meta[^>]+property=["\']og:price:amount["\'][^>]+content=["\']([^"\']+)["\']', html, flags=re.I)
+        if m:
+            data['price'] = float(m.group(1).replace(',', ''))
+    except Exception:
+        pass
+    return data
+
 
 @app.route('/product/resolve', methods=['POST'])
 def product_resolve():
@@ -821,6 +877,260 @@ def product_resolve():
         })
     except Exception as e:
         logger.error(f"Product resolve error: {e}")
+        return jsonify({"error": str(e)}), 500
+
+# --------------------------
+# Deal Hunter: Claude-assisted web search
+# --------------------------
+
+def _host_to_merchant(host: str) -> tuple[int | None, str]:
+    h = host.lower().replace('www.', '')
+    if 'amazon.' in h:
+        return 44, 'Amazon'
+    if 'walmart.com' in h:
+        return 45, 'Walmart'
+    if 'target.com' in h:
+        return 12, 'Target'
+    if 'costco.com' in h:
+        return 165, 'Costco'
+    if 'instacart.com' in h:
+        return 40, 'Instacart'
+    if 'bestbuy.com' in h:
+        return 77, 'BestBuy'
+    return None, h
+
+def _normalize_result(url: str, title: str | None, snippet: str | None, image: str | None, html: str | None) -> dict:
+    host = urlparse(url).hostname or ''
+    mid, mname = _host_to_merchant(host)
+    item = {
+        'title': title,
+        'url': url,
+        'snippet': snippet,
+        'image': image,
+        'merchant_name': mname,
+        'merchant_id': mid,
+        'price_usd': None,
+        'source': 'search',
+    }
+    if html:
+        og = _extract_og_meta(html)
+        if og.get('title') and not item['title']:
+            item['title'] = og['title']
+        if og.get('image') and not item['image']:
+            item['image'] = og['image']
+        if og.get('price') is not None:
+            item['price_usd'] = og['price']
+        # try site-specific price
+        t, p = _extract_title_and_price(html, merchant=mname)
+        if p is not None:
+            item['price_usd'] = p
+        if t and not item['title']:
+            item['title'] = t
+        item['source'] = 'search+og'
+    return item
+
+@app.route('/dealhunter/claude_search', methods=['POST'])
+def dealhunter_claude_search():
+    try:
+        data = request.get_json() or {}
+        query = (data.get('query') or '').strip()
+        budget_cents = data.get('budget_cents')
+        max_results = int(data.get('max_results') or 10)
+        max_results = max(1, min(max_results, 10))
+        if not query:
+            return jsonify({"error": "missing query"}), 400
+
+        # Trusted merchant hosts and product URL patterns
+        TRUSTED_HOSTS = (
+            'amazon.', 'walmart.com', 'target.com', 'bestbuy.com'
+        )
+        def _is_trusted_host(host: str) -> bool:
+            h = (host or '').lower()
+            return any(k in h for k in TRUSTED_HOSTS)
+        def _is_product_like(url: str) -> bool:
+            try:
+                h = (urlparse(url).hostname or '').lower()
+                p = (urlparse(url).path or '')
+                if 'amazon.' in h:
+                    return bool(re.search(r'/(?:dp|gp/product)/[A-Z0-9]{10}', p, flags=re.I))
+                if 'walmart.com' in h:
+                    return '/ip/' in p
+                if 'target.com' in h:
+                    return bool(re.search(r'/A-\d+', p))
+                if 'bestbuy.com' in h:
+                    return '/site/' in p and ('/p' in p or '/skuId' in p or re.search(r'-p$', p))
+            except Exception:
+                return False
+            return True
+
+        # 1) Web search via Brave (if available)
+        brave_key = os.getenv('BRAVE_API_KEY')
+        results = []
+        if brave_key:
+            try:
+                headers = {"X-Subscription-Token": brave_key}
+                # Constrain query to trusted domains
+                site_filter = " (site:amazon.com OR site:walmart.com OR site:target.com OR site:bestbuy.com)"
+                q = query + site_filter if all(s not in query for s in ['site:amazon.com','site:walmart.com','site:target.com','site:bestbuy.com']) else query
+                r = requests.get(
+                    "https://api.search.brave.com/res/v1/web/search",
+                    params={"q": q, "count": 20},
+                    headers=headers, timeout=8
+                )
+                if r.status_code == 200:
+                    j = r.json() or {}
+                    for ent in (j.get('web', {}).get('results') or []):
+                        results.append({
+                            'title': ent.get('title'),
+                            'url': ent.get('url'),
+                            'snippet': ent.get('description'),
+                            'image': (ent.get('thumbnail') or {}).get('src'),
+                        })
+            except Exception as e:
+                logger.warning(f"Brave search failed: {e}")
+
+        # 1b) Try Brave shopping vertical (richer price metadata)
+        if brave_key and not results:
+            try:
+                headers = {"X-Subscription-Token": brave_key}
+                rq = query + " site:amazon.com OR site:walmart.com OR site:target.com OR site:bestbuy.com"
+                rs = requests.get(
+                    "https://api.search.brave.com/res/v1/shopping/search",
+                    params={"q": rq, "count": 20},
+                    headers=headers, timeout=8
+                )
+                if rs.status_code == 200:
+                    sj = rs.json() or {}
+                    for ent in (sj.get('shopping_results') or []):
+                        results.append({
+                            'title': ent.get('title'),
+                            'url': ent.get('url'),
+                            'snippet': ent.get('description'),
+                            'image': ent.get('thumbnail') or ent.get('image'),
+                            'price': ent.get('price'),
+                        })
+            except Exception as e:
+                logger.warning(f"Brave shopping failed: {e}")
+
+        # 2) Enrich a subset with OG/meta
+        normalized = []
+        for ent in results[:20]:
+            url = ent.get('url')
+            if not url:
+                continue
+            # drop non-trusted hosts early
+            if not _is_trusted_host((urlparse(url).hostname or '')):
+                continue
+            if not _is_product_like(url):
+                continue
+            html = None
+            try:
+                resp = requests.get(url, timeout=5, headers={"User-Agent": "Mozilla/5.0"})
+                if resp.status_code == 200 and len(resp.text) < 2_000_000:
+                    html = resp.text
+            except Exception:
+                html = None
+            item = _normalize_result(url, ent.get('title'), ent.get('snippet'), ent.get('image'), html)
+            # carry over price from shopping response if present
+            try:
+                sp = ent.get('price')
+                if sp and item.get('price_usd') is None:
+                    # normalize $1,234.56 or 1234.56
+                    val = float(str(sp).replace('$','').replace(',','').strip())
+                    item['price_usd'] = val
+            except Exception:
+                pass
+            normalized.append(item)
+
+        # 3) Filter by budget if present
+        if budget_cents is not None:
+            try:
+                b = float(budget_cents) / 100.0
+                normalized = [x for x in normalized if (x.get('price_usd') is None or x.get('price_usd') <= b)]
+            except Exception:
+                pass
+
+        # Prefer items with known price; keep unknowns only if needed to reach max_results
+        with_price = [x for x in normalized if isinstance(x.get('price_usd'), (int, float))]
+        without_price = [x for x in normalized if x not in with_price]
+
+        # 4) Ask LLM to pick top items (if configured)
+        top = []
+        if normalized:
+            try:
+                llm = get_llm()
+                system = (
+                    "You are Deal Hunter. Use ONLY the provided items and trusted sellers."
+                    " TRUSTED_SELLERS: Amazon, Walmart, Target, Newegg, B&H, Adorama, Micro Center, Costco, Apple, Samsung."
+                    " Exclude any item not from these sellers."
+                    " Do NOT invent data, prices, or images."
+                    " Return STRICT JSON array with objects:"
+                    "  title (string), url (string), image (string or null), price_usd (number or null),"
+                    "  merchant_name (one of: Amazon, Walmart, Target, Newegg, B&H, Adorama, Micro Center, Costco, Apple, Samsung), reason (one short line)."
+                    " If price is unknown, set price_usd to null."
+                )
+                payload = {
+                    "query": query,
+                    "budget_usd": (float(budget_cents)/100.0 if budget_cents is not None else None),
+                    "items": (with_price + without_price)[:20],
+                    "trusted_merchants": ["Amazon","Walmart","Target","Newegg","B&H","Adorama","Micro Center","Costco","Apple","Samsung"],
+                }
+                msg = (
+                    "Pick the best deals (max " + str(max_results) + ") from the provided items for the query/budget."
+                    " Use only trusted merchants. Prefer lower prices and clear relevance."
+                    " Exclude items missing title or url."
+                    " Output JSON only."
+                    "\n\n" + json.dumps(payload)
+                )
+                try:
+                    resp = llm.invoke([SystemMessage(content=system), HumanMessage(content=msg)])
+                except Exception as e:
+                    msgstr = str(e)
+                    if ('model_not_found' in msgstr) or ('does not exist' in msgstr):
+                        # resolve available model and retry
+                        sel = resolve_available_model(_first_env(["CEREBRAS_MODEL","OPENAI_MODEL","MODEL"]))
+                        llm = ChatOpenAI(
+                            model=sel,
+                            temperature=0.3,
+                            api_key=_first_env(["CEREBRAS_API_KEY","CEREBRASAI_API_KEY","CB_API_KEY","OPENAI_API_KEY"]),
+                            base_url=_first_env(["CEREBRAS_BASE_URL","CEREBRAS_API_BASE","CEREBRAS_URL","OPENAI_BASE_URL"]),
+                            max_tokens=512,
+                        )
+                        resp = llm.invoke([SystemMessage(content=system), HumanMessage(content=msg)])
+                    else:
+                        raise
+                text = resp.content if hasattr(resp, 'content') else str(resp)
+                try:
+                    arr = json.loads(text)
+                    if isinstance(arr, list):
+                        # Post-validate LLM output
+                        safe = []
+                        for it in arr:
+                            try:
+                                u = it.get('url')
+                                host = (urlparse(u).hostname or '')
+                                if not u or not _is_trusted_host(host):
+                                    continue
+                                if not it.get('title'):
+                                    continue
+                                safe.append(it)
+                            except Exception:
+                                continue
+                        top = safe[:max_results]
+                except Exception:
+                    # Fallback: simple price sort
+                    fallback = with_price + without_price
+                    fallback.sort(key=lambda x: (x.get('price_usd') if x.get('price_usd') is not None else 1e9))
+                    top = fallback[:max_results]
+            except Exception as e:
+                logger.warning(f"LLM ranking failed: {e}")
+                fallback = with_price + without_price
+                fallback.sort(key=lambda x: (x.get('price_usd') if x.get('price_usd') is not None else 1e9))
+                top = fallback[:max_results]
+
+        return jsonify({"ok": True, "count": len(top), "items": top})
+    except Exception as e:
+        logger.error(f"claude_search error: {e}")
         return jsonify({"error": str(e)}), 500
 
 @app.route('/price-history/list', methods=['GET'])

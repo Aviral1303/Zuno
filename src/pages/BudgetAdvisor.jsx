@@ -81,7 +81,7 @@ export default function BudgetAdvisor() {
   const grandTotal = scaledMerchants.reduce((s, m) => s + (m.value || 0), 0);
 
   return (
-    <div className="min-h-screen bg-white p-6">
+    <div className="min-h-screen bg-white p-4 md:p-6">
       <div className="max-w-6xl mx-auto">
         <motion.div
           initial={{ opacity: 0, y: 20 }}
@@ -107,8 +107,8 @@ export default function BudgetAdvisor() {
         </motion.div>
 
         {/* Overview */}
-        <div className="grid md:grid-cols-3 gap-6 mb-8">
-          <div className="md:col-span-1 bg-white rounded-3xl p-6 border border-gray-100">
+        <div className="grid md:grid-cols-3 gap-4 md:gap-6 mb-8">
+          <div className="md:col-span-1 bg-white rounded-3xl p-4 md:p-6 border border-gray-100">
             <h3 className="text-sm font-medium text-gray-900 mb-4">Spending distribution</h3>
             <div className="flex items-center justify-center">
               <PieChart data={pieMerchants} size={220} />
@@ -127,7 +127,7 @@ export default function BudgetAdvisor() {
             </div>
           </div>
 
-          <div className="md:col-span-2 bg-white rounded-3xl p-6 border border-gray-100">
+          <div className="md:col-span-2 bg-white rounded-3xl p-4 md:p-6 border border-gray-100">
             <h3 className="text-sm font-medium text-gray-900 mb-4">By merchant (est.)</h3>
             <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-4">
               {scaledMerchants.map((m) => (
@@ -141,7 +141,7 @@ export default function BudgetAdvisor() {
         </div>
 
         {/* Recent transactions */}
-        <div className="bg-white rounded-3xl p-6 border border-gray-100">
+        <div className="bg-white rounded-3xl p-4 md:p-6 border border-gray-100">
           <div className="flex items-center justify-between mb-3">
             <h3 className="text-sm font-medium text-gray-900">Recent transactions</h3>
             <div className="text-xs text-gray-500">Last 10</div>
