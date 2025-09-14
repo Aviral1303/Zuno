@@ -20,6 +20,10 @@ try:
 except Exception:
     AIMessage = None
 from openai import OpenAI
+try:
+    import anthropic
+except Exception:
+    anthropic = None
 import requests
 import re
 import html as htmllib
@@ -181,9 +185,8 @@ def dealhunter_rag_search():
                 return []
 
         if _is_vague(query):
-            # Build a concise history context from chunks and/or mock Amazon transactions
+            # Anthropic-only: construct queries from mock Amazon history
             tx = _fetch_mock_amazon_transactions(external_user_id)
-            # Create a compact product list for LLM selection
             items_lines = []
             seen = set()
             for t in tx[:30]:
@@ -199,58 +202,62 @@ def dealhunter_rag_search():
                 if len(items_lines) >= 12:
                     break
 
-            llm = get_llm()
-            system_pick = (
-                "You are a shopping assistant. From the user's recent purchase list, pick up to TWO concrete search queries "
-                "(specific product/category + brand/model) that reflect their tastes. Prefer Amazon-relevant queries. "
-                "Return STRICT JSON array of up to 2 strings. No commentary."
-            )
-            human_pick = (
-                f"User vague request: '{query}'.\nRecent items:\n" + "\n".join(items_lines) + "\n\nQueries JSON:"
-            )
             picked_queries = []
             try:
-                resp_pick = llm.invoke([SystemMessage(content=system_pick), HumanMessage(content=human_pick)])
-                txt = resp_pick.content if hasattr(resp_pick, 'content') else str(resp_pick)
+                client = get_anthropic_client()
+                system_pick = (
+                    "You are a shopping assistant. From the user's recent Amazon purchases, pick up to TWO concrete search queries "
+                    "(specific product/category + brand/model) that reflect their tastes. Prefer Amazon-relevant queries. "
+                    "Return STRICT JSON array of up to 2 strings. No commentary."
+                )
+                human_pick = (
+                    f"User vague request: '{query}'.\nRecent items:\n" + "\n".join(items_lines) + "\n\nQueries JSON:"
+                )
+                resp = client.messages.create(
+                    model=os.getenv('ANTHROPIC_MODEL', 'claude-3-5-sonnet-20240620'),
+                    max_tokens=200,
+                    system=system_pick,
+                    messages=[{"role":"user","content":human_pick}],
+                )
+                txt = resp.content[0].text if getattr(resp, 'content', None) else ''
                 arr = json.loads(txt)
                 if isinstance(arr, list):
                     picked_queries = [str(x).strip() for x in arr if str(x).strip()][:2]
-            except Exception:
+            except Exception as e:
+                logger.warning(f"Anthropic pick failed: {e}")
                 picked_queries = []
-            # Fallback: use top two names
             if not picked_queries:
                 picked_queries = [ln[2:].strip() for ln in items_lines[:2]]
 
-            # Search Brave for each picked query and aggregate up to max_results
             combined = []
             for pq in picked_queries:
                 try:
                     rs = requests.post(f"{base}/dealhunter/claude_search", json={
-                        "query": pq, "budget_cents": budget_cents, "max_results": max(1, max_results // len(picked_queries) or 1)
+                        "query": pq, "budget_cents": budget_cents, "max_results": max(1, max_results // max(1,len(picked_queries)))
                     }, timeout=30)
                     js = rs.json() if rs.status_code == 200 else {"items": []}
-                    for it in js.get('items', [])[:2]:
-                        combined.append(it)
+                    combined.extend(js.get('items', [])[:2])
                 except Exception:
                     continue
-            return jsonify({"ok": True, "count": len(combined), "items": combined, "rag": {"used": True, "strategy": "history_pick", "picked": picked_queries}})
+            return jsonify({"ok": True, "count": len(combined), "items": combined, "rag": {"used": False, "strategy": "anthropic_only_vague"}})
 
-        # Ask LLM to expand the query given chunks
-        llm = get_llm()
-        context_snippets = "\n\n".join(chunks[:8])
-        system = (
-            "You are a shopping assistant that crafts a SEARCH QUERY for a shopping engine. "
-            "Goals: (1) Personalize using the user's purchase history; (2) Expand vague prompts like 'suggest me something' or 'something I like' into concrete product categories/brands/models; "
-            "(3) Prefer trusted merchants (Amazon, Target, Walmart) when possible; (4) Keep it concise and useful for web search; (5) Respect budget if provided. "
-            "Return ONLY the expanded query string (10-16 words). No commentary."
-        )
-        human = (
-            f"User query: '{query}'.\n\nPurchase history context (recent merchants/items and months):\n{context_snippets}\n\n"
-            f"If the user's query is vague (e.g., 'suggest me something', 'something I like'), infer categories/brands from the context. "
-            f"If Amazon appears frequently, bias toward Amazon-relevant brands/items. \n\nExpanded query:"
-        )
-        resp = llm.invoke([SystemMessage(content=system), HumanMessage(content=human)])
-        expanded = (resp.content if hasattr(resp, 'content') else str(resp)).strip()
+        # Anthropic-only expansion (RAG disabled but preserved in code)
+        try:
+            client = get_anthropic_client()
+            resp = client.messages.create(
+                model=os.getenv('ANTHROPIC_MODEL', 'claude-3-5-sonnet-20240620'),
+                max_tokens=100,
+                system=(
+                    "You are a shopping assistant that crafts a SEARCH QUERY for a shopping engine. "
+                    "Expand the user's query concisely for web search. Prefer trusted merchants (Amazon, Target, Walmart) and reflect likely preferences. "
+                    "Return ONLY the expanded query string (10-16 words)."
+                ),
+                messages=[{"role":"user","content": f"User query: '{query}'. Expanded query only:"}],
+            )
+            expanded = resp.content[0].text.strip() if getattr(resp, 'content', None) else query
+        except Exception as e:
+            logger.warning(f"Anthropic expand failed, fallback to original query: {e}")
+            expanded = query
         if len(expanded) < 4:
             expanded = query
 
@@ -319,6 +326,14 @@ def get_openai_client():
     if not api_key or not base_url:
         raise RuntimeError("Missing LLM credentials. Set CEREBRAS_BASE_URL and CEREBRAS_API_KEY in .env")
     return OpenAI(api_key=api_key, base_url=base_url)
+
+def get_anthropic_client():
+    key = os.getenv('ANTHROPIC_API_KEY')
+    if not key:
+        raise RuntimeError('Missing ANTHROPIC_API_KEY')
+    if anthropic is None:
+        raise RuntimeError('anthropic package not installed')
+    return anthropic.Anthropic(api_key=key)
 
 def resolve_available_model(preferred: str | None = None) -> str:
     try:
