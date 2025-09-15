@@ -137,7 +137,7 @@ export default function GiftPlanner() {
       console.log("Search", search);
       const qs = new URLSearchParams(search);
       console.log("QS", qs);
-      const providedSid = "320017dc-2c98-4528-923a-57f31f3e6a34";
+      const providedSid = "b8b91632-32ec-47ff-adc1-533b6bca19a5";
       console.log("Provided Session ID", providedSid);
       if (!providedSid) {
         throw new Error('Missing session id. Provide ?session_id=... in URL or set it in state.');
@@ -149,12 +149,12 @@ export default function GiftPlanner() {
       const cid = 'dda0778d-9486-47f8-bd80-6f2512f9bcdb';
 
       client.open({
-        sessionId: "320017dc-2c98-4528-923a-57f31f3e6a34",
+        sessionId: "b8b91632-32ec-47ff-adc1-533b6bca19a5",
         clientId: cid,
         environment: 'development',
         product: 'transaction_link',
         merchantIds: [44], // Amazon
-        entryPoint: 'knot_sync',
+        entryPoint: 'knot_sync',  
         onSuccess: () => {
           setAmazonConnected(true);
         },
